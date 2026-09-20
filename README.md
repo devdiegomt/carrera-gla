@@ -1,350 +1,216 @@
 # Registro de Vueltas — Carrera Escolar
 
-PWA offline-first para cronometrar vueltas con manillas NFC (NTAG213) en una
-carrera de atletismo escolar. HTML, CSS y JavaScript sin frameworks ni
-dependencias. Todo en español, hora local de Bogotá en formato 24 h.
+App para cronometrar vueltas con manillas NFC en una carrera de colegio.
+Funciona sin internet, en el celular, y la usan profesores, no informáticos.
 
-Pensada para: varios grupos de ~300 corredores que corren uno después de otro
-reutilizando las mismas manillas y los mismos dorsales, con salidas escalonadas,
-varios profesores leyendo en la meta y sin wifi ni datos en la cancha.
+HTML, CSS y JavaScript sin frameworks ni librerías. Todo en español, hora de
+Bogotá en formato 24 horas.
 
 ---
 
-## 1. Los tres conceptos
+## 1. Tres palabras que hay que entender
 
-Antes de tocar nada conviene tener claros estos tres, porque todo lo demás se
-deriva de ellos.
+Toda la app gira alrededor de estas tres. En pantalla no aparece ninguna otra
+palabra técnica.
 
-### TANDA — un grupo que corre junto
+**GRUPO** — los que corren juntos. Cada grupo tiene sus propios dorsales,
+manillas, vueltas y resultados. El dorsal 101 del grupo de la mañana y el 101
+del grupo de la tarde son dos personas distintas, y la app nunca los mezcla.
+Eso es lo que permite reutilizar los mismos petos y las mismas manillas todo
+el día.
 
-Una tanda es una carrera completa: sus corredores, sus dorsales, sus manillas y
-sus vueltas. **El dorsal 101 de la tanda de la mañana y el 101 de la tanda de la
-tarde son dos personas distintas**, y la app los trata como tales: los eventos,
-la deduplicación y la tabla de posiciones nunca se cruzan entre tandas.
+**SALIDA** — dentro de un grupo, los que arrancan al mismo tiempo. Si el grupo
+sale escalonado (unos 30 o 40 segundos después de otros), se crea una salida
+por cada arranque, y cada una guarda su propia hora. El tiempo de cada
+corredor se cuenta desde la salida de *su* grupo, no desde la primera.
 
-Eso es lo que permite reutilizar dorsales y manillas: creas una tanda nueva y
-los mismos números vuelven a estar libres, sin borrar ni pisar los datos de la
-anterior.
-
-La tanda activa se elige en la barra que está justo debajo de la cabecera, y
-está visible en todas las pantallas. Cada tanda tiene su propio número de
-vueltas y su propia ventana de deduplicación: un grupo de pequeños puede correr
-3 vueltas y el de mayores 6.
-
-Cada tanda tiene un código corto (`T-4K9P`). Ese código es lo que hace que
-todos los celulares sepan que están trabajando sobre la misma tanda, y viaja
-dentro del padrón y de cada exportación.
-
-### OLEADA — una salida escalonada dentro de una tanda
-
-Si el grupo sale por tandas de 30–40 segundos, crea una oleada por salida. Cada
-oleada tiene su propia **hora de salida**, y el tiempo de cada corredor se mide
-desde la salida de SU oleada.
-
-Sin esto, el que salió primero gana siempre por 35 segundos regalados. Con esto,
-la tabla puede ordenarse de dos maneras:
-
-- **Tiempo neto** — descuenta la salida de cada oleada. Es la clasificación justa.
-- **Hora de llegada** — el orden tal como se cruza la meta. Es lo que ve el juez.
-
-Ejemplo real de la app, con dos oleadas separadas 35 s y todos con 2 vueltas:
-
-| Corredor | Oleada | Cruza la meta | Tiempo neto |
-| -------- | ------ | ------------- | ----------- |
-| A | 1 | 08:03:20 | 3:20 |
-| C | 2 | 08:03:35 | **3:00** |
-| B | 1 | 08:04:00 | 4:00 |
-| D | 2 | 08:04:55 | 4:20 |
-
-Por llegada gana A. Por tiempo neto gana C, que es quien realmente corrió más
-rápido. Los dos órdenes están disponibles y se exportan.
-
-### MANILLA — el chip, que va y viene
-
-La app guarda el **historial completo de cada manilla**: a qué dorsal y a qué
-persona perteneció en cada tanda. Ese historial es lo que hace rápida la
-reinscripción (sección 3).
+**MANILLA** — el chip NFC que lleva el corredor. La app recuerda de quién fue
+cada manilla en cada grupo, y eso es lo que hace rápido volver a repartirlas.
 
 ---
 
-## 2. Despliegue en Netlify
+## 2. Poner la app a funcionar
 
-El sitio es estático: no hay build ni dependencias.
+El sitio es estático: no hay que compilar nada.
 
-**Arrastrando la carpeta:** entra a <https://app.netlify.com/drop> y arrastra la
-carpeta `carrera-vueltas` completa. Netlify entrega la URL en https, que es lo
-que Web NFC exige.
+**Publicar:** arrastra la carpeta a <https://app.netlify.com/drop>. Netlify
+devuelve una dirección `https`, que es lo que el NFC exige. Desde Git: build
+command vacío, publish directory `.`.
 
-**Desde Git:** build command vacío, publish directory `.`.
+**En cada celular:**
 
-`netlify.toml` y `_headers` ya traen las cabeceras necesarias: `sw.js` sin caché
-(para que las actualizaciones lleguen) y cabeceras de seguridad básicas.
+1. Abre la dirección **en Chrome para Android** (no dentro de WhatsApp ni Gmail).
+2. Menú ⋮ → «Instalar aplicación».
+3. Ábrela una vez con internet: queda lista para funcionar sin señal.
+4. Entra a **Ajustes → Revisión del sistema** y confirma que todo esté en verde.
 
-**Después de desplegar**, en cada celular:
-
-1. Abre la URL **en Chrome para Android** (no dentro de WhatsApp ni Gmail).
-2. Menú ⋮ → «Instalar aplicación» / «Añadir a pantalla de inicio».
-3. Ábrela una vez con red: el service worker precarga todo y a partir de ahí
-   funciona completa sin conexión.
-4. Ve a **Ajustes → Diagnóstico** y confirma que todo esté en verde.
-
-**Requisitos:** Chrome para Android 124 o superior con NFC activado. Web NFC no
-existe en iPhone ni en Chrome de escritorio; ahí la app arranca automáticamente
-en **modo teclado**, que sirve perfectamente como respaldo.
+Hace falta **Chrome para Android 124 o superior** con NFC activado. En iPhone o
+en computador no hay NFC: la app arranca sola en modo teclado, que sirve
+perfectamente de respaldo.
 
 ---
 
-## 3. Reutilizar las manillas entre tandas
+## 3. Inscribir corredores
 
-Hay dos caminos. Cuál te sirve depende de una sola pregunta: **¿la manilla va
-pegada a un número de dorsal fijo?**
+Tres formas, en la pestaña **Inscritos**. Solo se ve una a la vez.
 
-### Camino A — la manilla y el dorsal van juntos (el rápido)
+### Desde Excel (lo más práctico para 300 estudiantes)
 
-Si la manilla lleva impreso o pegado su número, y ese número se reparte con su
-peto correspondiente, entonces la pareja dorsal↔manilla nunca cambia. En ese
-caso **no hay que volver a escanear nada**.
+1. **Descargar planilla** genera un archivo `.xlsx` de verdad, con las columnas
+   ya puestas, ejemplos, anchos de columna y una hoja de instrucciones.
+2. El colegio la llena en Excel o en Google Sheets.
+3. **Subir planilla llena**. Antes de agregar nada, la app muestra cuántos
+   encontró, cuáles ya existían y qué filas tienen problemas, fila por fila.
 
-1. **Ajustes → Tandas → Nueva tanda**.
-2. En «Reutilizar manillas de», elige la tanda anterior.
-3. Crear.
+Las columnas son `Dorsal`, `Nombre`, `Categoría` y `Salida`. Solo las dos
+primeras son obligatorias. La app encuentra los títulos aunque estén en otro
+orden o unas filas más abajo, y también acepta archivos `.csv`.
 
-La tanda nueva nace con todos los dorsales y todas sus manillas ya vinculadas, y
-los nombres en blanco. Los organizadores solo escriben los nombres (o ni
-siquiera: la app funciona con dorsales sin nombre y los nombres se pueden pegar
-después con la carga masiva).
+### Con manilla
 
-Si es literalmente la misma gente corriendo otra vez, marca también «Copiar
-también los nombres» y la tanda queda lista de una.
+Para repartir manillas reutilizadas. Enciendes el escaneo, acercas una manilla
+y la app te dice **de quién fue antes** y propone ese mismo dorsal si está
+libre. Solo escribes el nombre y sigues con la siguiente.
 
-### Camino B — las manillas se reparten al azar (el exprés)
+### A mano
 
-Si las manillas se entregan como salgan, usa **Inscripción → Inscripción exprés
-por manilla**:
-
-1. Pulsa «Escanear manilla e inscribir». El lector queda encendido.
-2. Acerca una manilla. La app la reconoce y te muestra a quién perteneció en
-   las tandas anteriores, y **propone ese mismo dorsal si está libre**.
-3. Escribes el nombre y pulsas «Guardar y seguir».
-4. El formulario se cierra solo y queda listo para la siguiente manilla.
-
-Es una manilla por persona, sin escribir números salvo que quieras cambiarlos.
-Mientras el formulario está abierto, la app ignora otras lecturas para que una
-manilla suelta no te pise el registro a medias.
-
-### Si sobra o falta
-
-- Una manilla ya vinculada en la tanda activa se avisa en rojo antes de que la
-  reasignes.
-- Una manilla que llega a la meta sin estar vinculada **no pierde la vuelta**:
-  se guarda como marca pendiente con su hora exacta y con el UID. Cuando después
-  le pones el dorsal, la app registra la vuelta con la hora original **y de paso
-  vincula la manilla** a ese corredor.
+Para uno o dos sueltos.
 
 ---
 
-## 4. Varios organizadores inscribiendo a la vez
+## 4. Reutilizar las manillas entre grupos
 
-Reinscribir 300 personas entre tandas es el cuello de botella. La app está
-pensada para repartirlo entre los mismos profesores que luego leen en la meta.
+La pregunta que decide el método: **¿la manilla va pegada a un número fijo?**
 
-**Antes de repartir el trabajo:**
+**Si sí** — al crear el grupo nuevo, en «Reutilizar las manillas de» eliges el
+grupo anterior. El grupo nace con todos los dorsales y sus manillas ya puestas
+y los nombres en blanco. **No hay que escanear nada**: solo llega la planilla
+de Excel con los nombres nuevos.
 
-1. Un celular crea la tanda y exporta el padrón
-   (**Ajustes → Padrón → Exportar**).
-2. Los demás lo importan (**Importar padrón desde archivo → Fusionar**). Como el
-   padrón lleva el código de la tanda dentro, todos quedan inscribiendo sobre la
-   **misma** tanda, y la unión posterior no tiene que adivinar nada.
-3. En cada celular, **Ajustes → Configuración → Inscribe dorsales desde / hasta**:
-   CEL-1 del 1 al 100, CEL-2 del 101 al 200, CEL-3 del 201 al 300.
+**Si no** — usas «Con manilla»: una manilla por persona, sin teclear números.
 
-Con el rango puesto, el dorsal se autoincrementa dentro de tu tramo y la app
-avisa si escribes uno fuera de él. Es la forma barata de que dos organizadores
-no le den el mismo número a dos personas distintas.
-
-**Al terminar de inscribir**, cada uno exporta su JSON y se unen igual que los
-resultados (sección 5, paso 7). La unión reporta cualquier choque que haya
-quedado: mismo dorsal con dos nombres distintos, o la misma manilla en dos
-dorsales. Conserva siempre lo que ya tenía el celular que une y lista el resto
-para que lo arregles a mano.
+Si una manilla llega a la meta sin dueño, la vuelta **no se pierde**: se guarda
+con su hora exacta en «Sin dorsal», y al ponerle el dorsal la vuelta cuenta con
+esa hora y la manilla queda asignada de paso.
 
 ---
 
-## 5. Flujo del día de la carrera
+## 5. Varios profesores inscribiendo a la vez
 
-### Antes (días previos, con wifi)
+1. Un celular crea el grupo y comparte la lista
+   (**Ajustes → Lista de corredores → Compartir**).
+2. Los demás la abren. La lista lleva el grupo adentro, así todos quedan
+   inscribiendo sobre el mismo.
+3. En cada celular, **Ajustes → Este celular → Inscribe dorsales desde/hasta**:
+   CEL‑1 del 1 al 100, CEL‑2 del 101 al 200, CEL‑3 del 201 al 300.
 
-**Paso 1 — Crear la primera tanda** (Ajustes → Tandas → Nueva tanda): nombre,
-vueltas, ventana mínima y cuántas oleadas tendrá.
-
-**Paso 2 — Inscribir y vincular** en un celular, o repartido entre varios como
-explica la sección 4. Formas de cargar gente:
-
-- Uno a uno en **Inscribir a mano**.
-- **Carga masiva**: pega `dorsal,nombre,categoria,oleada` (una línea por
-  corredor; la oleada es opcional), pulsa **Vista previa**, revisa los avisos y
-  confirma.
-- **Inscripción exprés por manilla** (sección 3, camino B).
-
-Si las oleadas se reparten por número de dorsal, usa
-**Ajustes → Oleadas → Repartir inscritos entre oleadas** e indica desde qué
-dorsal empieza cada una.
-
-**Paso 3 — Ajustes de cada celular:**
-
-| Campo | Qué significa |
-| ----- | ------------- |
-| Nombre del evento | El día completo: «Día del deporte 2026». |
-| Nombre de la tanda activa | El grupo: «Primaria mañana». |
-| Vueltas para terminar | De esta tanda. Cambiarlo **nunca borra eventos**. |
-| Ventana mínima entre vueltas | Segundos que deben pasar para aceptar otra marca del mismo dorsal. Ponla algo por debajo del tiempo de vuelta del corredor más rápido de esa tanda. |
-| Dígitos del dorsal | Cuántos dígitos tiene un dorsal; el teclado registra al completarlos. |
-| Nombre del puesto | «Meta izquierda», «Meta derecha»… |
-| Identificador del dispositivo | **Distinto en cada celular** (CEL-1, CEL-2…). Viaja en cada evento y sale en el reporte de descartes. |
-| Inscribe dorsales desde / hasta | El tramo de este organizador (sección 4). |
-
-**Paso 4 — Exportar el padrón e importarlo en los demás celulares.** Después de
-importar, verifica en cada uno su identificador de dispositivo y su puesto: el
-padrón no los sobrescribe.
-
-### El día, antes de arrancar
-
-**Paso 5 — Verificar relojes.** Abre **Ajustes → Verificar hora** en todos los
-celulares a la vez y compara el reloj gigante. La deduplicación entre
-dispositivos y los tiempos netos comparan horas: si un celular va 30 segundos
-adelantado, marcas repetidas pueden colarse como vueltas distintas. Activa «hora
-automática de la red» en todos.
-
-**Paso 6 — Preparar cada celular.** Brillo al máximo, ahorro de energía
-desactivado, y en **Carrera** pulsa **Activar lectura NFC**. La app mantiene la
-pantalla encendida mientras la lectura está activa.
-
-### Durante la carrera
-
-**Dar las salidas.** En **Carrera → Salidas** hay un botón grande por oleada.
-Púlsalo **en el momento exacto del disparo**. Queda la hora y un cronómetro en
-vivo. Si se te olvidó, «Corregir» permite escribir la hora a mano.
-
-Basta con que **un** celular marque las salidas: al unir, la hora se propaga a
-los demás.
-
-**Leer.** Acerca la manilla al centro de la parte trasera del celular. El panel
-grande responde con **color, sonido y vibración distintos**:
-
-- **Verde**, pitido corto: vuelta válida. Muestra «Vuelta N de M», la oleada y
-  el tiempo neto.
-- **Ámbar**, fanfarria ascendente: vuelta final, el corredor terminó.
-- **Rojo**, dos tonos graves: rechazada, con el motivo (repetida, no inscrito,
-  ya terminó) y la hora y el celular de la marca anterior.
-
-**Respaldos:** teclado numérico si una manilla no lee, «Marcar sin identificar»
-si alguien pasa sin que alcances a leerlo (guarda la hora exacta y le pones el
-dorsal después), «Deshacer último» y el historial de las últimas diez lecturas.
-
-### Entre una tanda y la siguiente
-
-1. Exporta el JSON de cada celular (paso 7). Hazlo **antes** de cambiar de
-   tanda; así si algo sale mal tienes el respaldo.
-2. Crea la tanda siguiente heredando las manillas (sección 3).
-3. Exporta el padrón nuevo y compártelo con los demás celulares.
-4. Reinscribe.
-
-Los datos de la tanda anterior siguen ahí: se consultan cambiando la tanda
-activa en la barra superior.
-
-### Al terminar
-
-**Paso 7 — Exportar cada dispositivo.** En cada celular:
-**Posiciones → Exportar → Respaldo completo (JSON)**, alcance **Todas las
-tandas**, y **Descargar** (o **Compartir**). Hazlo en **todos**, incluido el que
-va a hacer la unión.
-
-**Paso 8 — Unir.** En un solo celular (o en un computador con la misma URL):
-**Ajustes → Unir dispositivos → Cargar archivos JSON** y selecciona todos.
-
-Primero la app muestra **a qué tanda corresponde cada grupo**. Si todos
-importaron el mismo padrón, ya viene resuelto y solo hay que seguir; solo se
-toca si alguien creó la tanda por su cuenta. Pulsa **Calcular la unión** y verás,
-antes de aplicar nada:
-
-- cuántas vueltas quedan válidas y cuántas se descartan;
-- los **conflictos de inscripción** (mismo dorsal con dos nombres, misma manilla
-  en dos dorsales);
-- el resumen por tanda y por dispositivo;
-- el **reporte de descartes**: tanda, dorsal, las dos horas y los dos
-  dispositivos, descargable en CSV;
-- aviso si hay marcas de dorsales que nadie inscribió.
-
-Pulsa **Aplicar unión**. Se guarda un respaldo automático: **Deshacer la última
-unión** revierte todo si algo salió mal.
-
-**Paso 9 — Resultados.** En **Posiciones**: filtra por categoría y por oleada,
-elige el orden (tiempo neto o llegada) y exporta **Posiciones (CSV)**,
-**Eventos (CSV)**, **Padrón con manillas (CSV)** o el **JSON completo**, por
-descarga, Compartir o copia al portapapeles.
+Con el rango puesto, el número se autocompleta dentro de tu tramo y la app
+avisa si te sales. Es la forma barata de que dos profesores no le den el mismo
+número a dos estudiantes distintos.
 
 ---
 
-## 6. Cómo funciona la deduplicación
+## 6. El día de la carrera
 
-> Una lectura de un dorsal se descarta si ese mismo dorsal ya tiene un evento
-> dentro de `ventanaMinSeg` segundos, **sin importar de qué dispositivo venga**.
+**Antes de arrancar**
 
-Se aplica en dos momentos:
+- **Ajustes → Verificar la hora** en todos los celulares a la vez. Si uno va
+  adelantado, se cuelan vueltas repetidas y los tiempos quedan mal.
+- Brillo al máximo, ahorro de energía apagado.
+- En **Carrera**, toca **Activar lectura**. La pantalla ya no se apaga.
 
-1. **Al registrar en el dispositivo.** Los eventos están indexados en memoria
-   por tanda y dorsal (`Map dorsal → array ordenado por hora`). Cada lectura
-   hace una búsqueda binaria sobre las pocas vueltas de ese dorsal, no un
-   recorrido del arreglo completo. Se mira hacia atrás **y hacia adelante**,
-   porque una marca pendiente asignada más tarde puede caer entre dos eventos ya
-   guardados.
+**Durante**
 
-2. **Al unir los archivos de todos los dispositivos.** Se mezcla todo (incluido
-   lo del celular que une), se descartan duplicados exactos por
-   `dispositivo + tanda + id`, se ordena cronológicamente y se conserva la
-   **primera** marca de cada `tanda + dorsal` en cada ventana. El resto va al
-   reporte de descartes.
+- **Salidas**: un botón grande por salida. Tócalo en el momento exacto del
+  pito. Si se te olvidó, «Corregir» permite escribir la hora a mano. Basta con
+  que **un** celular marque las salidas: al juntar los datos, la hora se pasa
+  a los demás.
+- Acerca la manilla a la parte de atrás del celular. El panel responde con
+  **color, sonido y vibración distintos**: verde si la vuelta cuenta, ámbar si
+  terminó, rojo si se rechaza, y el rojo dice siempre por qué.
+- Respaldos: teclado numérico, **Anotar sin dorsal** (guarda la hora y le pones
+  el dorsal después) y **Deshacer**.
 
-La agrupación por `tanda + dorsal` es lo que hace seguro reutilizar números: el
-101 de la mañana nunca descarta una marca del 101 de la tarde. Cada tanda aplica
-además **su propia** ventana.
+**Entre un grupo y el siguiente**
 
-Medido en el navegador con **3 tandas, 900 corredores y 15.300 eventos**:
+1. Comparte la copia de seguridad de cada celular.
+2. Crea el grupo siguiente reutilizando las manillas.
+3. Sube la planilla con los nombres nuevos.
 
-| Operación | Tiempo |
-| --------- | ------ |
-| Carga e indexado completo | ~114 ms |
-| Comprobación de conflicto por lectura | ~0,0014 ms |
-| Tabla de posiciones de 300 corredores | ~0,8 ms |
-| Cambiar de tanda activa | ~0,2 ms |
-| Deduplicación global de 15.300 eventos | ~13 ms |
+Los datos del grupo anterior siguen ahí: se consultan cambiando de grupo en la
+barra de arriba.
 
-### Orden de la tabla
+**Al terminar**
 
-Siempre vueltas descendente primero. A igual número de vueltas:
-
-- **Tiempo neto** (por defecto): desde la salida de su oleada hasta su última
-  marca, ascendente.
-- **Hora de llegada**: hora de la última marca, ascendente.
-
-Si una oleada no tiene hora de salida registrada, su tiempo se mide desde la
-primera marca de la tanda y aparece marcado con `*`, tanto en pantalla como en
-el CSV (columna `salida_estimada`). La pestaña Posiciones avisa en amarillo
-cuando eso pasa.
+1. En cada celular: **Resultados → Compartir resultados → Copia de seguridad**,
+   alcance «Todos los grupos».
+2. En uno solo: **Ajustes → Juntar los datos de los celulares**. Antes de
+   aplicar nada muestra cuántas vueltas quedan, cuántas estaban repetidas, qué
+   corredores tienen datos distintos en dos celulares y el detalle descargable
+   de cada repetición. Se guarda una copia: **se puede deshacer**.
+3. **Resultados** → filtra y comparte en CSV o Excel.
 
 ---
 
-## 7. Datos y privacidad
+## 7. Cómo se evita contar dos veces la misma vuelta
 
-- **Los datos nunca salen del dispositivo** salvo cuando tú exportas. No hay
-  servidor, ni analítica, ni peticiones de red después de la primera carga.
-- Son **nombres de menores de edad**: comparte los archivos solo por los canales
-  que autorice el colegio y borra los datos de los celulares prestados al
-  terminar (**Ajustes → Borrar todo**).
-- Todo se guarda en **IndexedDB**, en cada escritura (no al final): si el
-  navegador se cierra o el celular se apaga, no se pierde nada.
-- La app pide **almacenamiento persistente** para que el sistema no libere los
-  datos por falta de espacio. El estado se ve en Diagnóstico.
+> Una lectura se descarta si ese mismo dorsal ya marcó hace menos del **tiempo
+> mínimo entre vueltas**, sin importar de qué celular venga.
+
+Se aplica dos veces: al registrar en el celular, y otra vez al juntar los
+archivos de todos. La comparación se hace por **grupo + dorsal**, que es lo que
+hace seguro repetir números entre grupos. Cada grupo usa su propio tiempo
+mínimo: ponlo un poco por debajo de lo que tarda en dar una vuelta el corredor
+más rápido de ese grupo.
+
+Los eventos se indexan en memoria por grupo y dorsal, así que cada lectura hace
+una búsqueda binaria sobre las pocas vueltas de ese corredor. Medido con **3
+grupos, 900 corredores y 15.300 vueltas**: carga completa 114 ms, comprobación
+por lectura 0,0014 ms, tabla de 300 corredores 0,8 ms, juntar todo 13 ms.
+
+### Orden de los resultados
+
+Primero las vueltas, de mayor a menor. A igual número de vueltas:
+
+- **Por tiempo** (por defecto): descuenta la salida de cada grupo. Es el orden
+  justo cuando no todos arrancan a la vez.
+- **Por llegada**: el orden en que cruzaron la meta.
+
+Si una salida no tiene hora registrada, el tiempo se mide desde la primera
+vuelta del grupo y aparece marcado con `*`, en pantalla y en el archivo.
+
+---
+
+## 8. Notas de diseño
+
+Pensada para un celular de 360 px al sol, sostenido con una mano.
+
+- **Sin emojis.** Todos los iconos son SVG de trazo que heredan el color del
+  texto, así que funcionan igual en tema claro y oscuro.
+- **Sin controles nativos de Android.** Los desplegables, los diálogos y el
+  campo de hora son componentes propios (`js/ui.js`): una hoja que sube desde
+  abajo, con opciones de 56 px y su explicación. Todo sigue el mismo patrón.
+- **Nada se sale de la pantalla.** Verificado de forma automática: cero
+  desbordes y cero scroll horizontal en las cuatro pantallas a 360 px.
+- **Los resultados no son una tabla.** En un celular una tabla obliga a
+  desplazarse de lado. Cada corredor es una tarjeta que cabe completa.
+- **Una escala fija**: tres pesos de letra, siete tamaños, un solo verde de
+  marca. El color solo comunica estado.
+- Toque mínimo de 48 px; las acciones de carrera, 64 px.
+
+---
+
+## 9. Privacidad
+
+- **Los datos nunca salen del celular** salvo cuando tú los compartes. No hay
+  servidor ni analítica.
+- Son **nombres de menores de edad**: compártelos solo por los canales que
+  autorice el colegio y borra los celulares prestados al terminar
+  (**Ajustes → Borrar todo**).
+- Todo se guarda en IndexedDB en cada escritura, no al final: si el celular se
+  apaga, no se pierde nada.
+- El `.gitignore` excluye los archivos que la app exporta, para que una lista
+  de estudiantes no termine por accidente en el repositorio.
 
 ### Modelo de datos (esquema v2)
 
@@ -352,86 +218,60 @@ cuando eso pasa.
 config     { nombreCarrera, digitosDorsal, idDispositivo, nombrePuesto,
              tandaActiva, vueltasPorDefecto, ventanaPorDefecto,
              rangoDesde, rangoHasta, esquema }
-
 tandas     { id ("T-4K9P"), nombre, vueltas, ventanaMinSeg, estado, creadaEn,
              oleadas: [ { id, nombre, horaSalida } ] }
-
 corredores { id ("T-4K9P#101"), tanda, dorsal, nombre, categoria, uid, oleada }
-
-eventos    { id, tanda, dorsal, ts (epoch ms),
-             metodo: 'nfc'|'teclado'|'asignada', dispositivo }
-
+eventos    { id, tanda, dorsal, ts, metodo, dispositivo }
 pendientes { id, tanda, ts, uid }
-
 respaldos  { id: 'union', tandas, corredores, eventos, config, descartes }
 ```
 
-Cada archivo exportado lleva el campo `esquema`. Si un archivo viene de una
-versión más nueva que la app, la importación se rechaza con un mensaje claro en
-vez de corromper los datos.
-
-**Actualización desde la v1:** si ya habías usado la versión anterior, la app
-migra sola al abrirse. Los corredores y eventos existentes se agrupan en una
-tanda llamada como la carrera, y las vueltas y la ventana de la v1 pasan a ser
-los valores por defecto de las tandas nuevas. No hay que hacer nada.
+En el código se conservan los nombres `tanda` y `oleada`; en pantalla son
+«grupo» y «salida». Si vienes de la versión anterior, la app migra sola al
+abrirse.
 
 ---
 
-## 8. Estructura de archivos
+## 10. Archivos
 
 ```
-carrera-vueltas/
-├── index.html          # Las cuatro pantallas
-├── styles.css          # Alto contraste, tema claro y oscuro, toques de 56 px
-├── manifest.json       # PWA
-├── sw.js               # Service worker: precarga todo, offline-first
-├── netlify.toml        # Cabeceras de despliegue
-├── _headers            # Equivalente para Netlify Drop
-├── icons/
-│   ├── icon-192.png
-│   └── icon-512.png
-├── js/
-│   ├── util.js         # Hora de Bogotá 24 h, avisos, modales, sonido,
-│   │                   # vibración, CSV, descarga / Share / portapapeles
-│   ├── db.js           # IndexedDB, una transacción por escritura, migración v1→v2
-│   ├── estado.js       # Tandas, oleadas, índice por dorsal, deduplicación,
-│   │                   # historial de manillas, posiciones y tiempos netos
-│   ├── nfc.js          # Web NFC y traducción de errores al español
-│   ├── exportar.js     # CSV, JSON, padrón, unión de dispositivos y su deshacer
-│   ├── carrera.js      # Pantalla 1: lectura, salidas de oleada, pendientes
-│   ├── inscripcion.js  # Pantalla 2: exprés por manilla, alta, lista, masiva
-│   ├── posiciones.js   # Pantalla 3: tabla, filtros, orden y exportación
-│   ├── tandas.js       # Selector de tanda, gestión de tandas y oleadas
-│   ├── ajustes.js      # Pantalla 4: config, padrón, unión, diagnóstico
-│   └── app.js          # Arranque, navegación, Wake Lock, service worker
-└── README.md
+index.html        Esqueleto: la interfaz la construye el JavaScript
+styles.css        Sistema de diseño: fichas de color, escala y componentes
+sw.js             Service worker; sube VERSION al cambiar cualquier archivo
+manifest.json     PWA          icons/   192 y 512
+js/
+  util.js         Hora de Bogotá, CSV, descargar, compartir, sonido
+  ui.js           Componentes propios: hoja, selector, botones, iconos
+  excel.js        Genera y lee .xlsx de verdad, sin librerías
+  db.js           IndexedDB; una transacción por escritura
+  estado.js       Grupos, salidas, deduplicación, tiempos, posiciones
+  nfc.js          Web NFC y sus errores traducidos
+  exportar.js     CSV, JSON, listas y juntar celulares
+  carrera.js      Pantalla 1     inscripcion.js  Pantalla 2
+  posiciones.js   Pantalla 3     tandas.js       Grupos y salidas
+  ajustes.js      Pantalla 4     app.js          Arranque y navegación
 ```
 
-**Al modificar cualquier archivo, sube `VERSION` en `sw.js`.** Es lo que fuerza
-a los celulares a descargar la versión nueva.
+`excel.js` arma el `.xlsx` como lo que es —un ZIP con XML adentro— usando
+`CompressionStream` y `DecompressionStream`, que Chrome trae de fábrica. Por
+eso no hace falta ninguna librería.
 
 ---
 
-## 9. Problemas frecuentes
+## 11. Si algo sale mal
 
 | Síntoma | Qué hacer |
 | ------- | --------- |
-| «Este navegador no tiene Web NFC» | Estás en iPhone, en escritorio o en un navegador incrustado. Abre en Chrome para Android. La app funciona igual con el teclado. |
-| Banner «Estás en un navegador incrustado» | Abriste el enlace dentro de WhatsApp o Gmail. Menú ⋮ → «Abrir en Chrome». |
-| «Permiso de NFC denegado» | Candado junto a la dirección → Permisos → NFC → Permitir. |
-| «No se pudo acceder al lector NFC» | Activa el NFC en Ajustes → Conexiones y cierra apps de pago o transporte. |
-| La manilla no lee | Acércala al centro de la parte trasera y mantenla un segundo. La antena NFC no está en el borde. |
-| «Dorsal no está inscrito en …» | Estás en la tanda equivocada. Revisa el selector de tanda en la barra superior. |
-| Una vuelta legítima se rechaza como repetida | La ventana mínima de esa tanda está muy alta. Bájala en Ajustes; los eventos ya guardados no se tocan. |
-| Los tiempos salen con `*` | Esa oleada no tiene hora de salida. Carrera → Salidas → Corregir. |
-| El de la segunda oleada aparece detrás injustamente | Estás viendo el orden por «Hora de llegada». Cambia a «Tiempo neto» en Posiciones. |
-| Dos organizadores usaron el mismo dorsal | La unión lo reporta como conflicto. Arréglalo a mano y reparte rangos de dorsales la próxima vez. |
-| La pantalla se apaga en plena carrera | Activa la lectura NFC (activa el Wake Lock) y sube el tiempo de apagado del celular. |
-| Un celular se quedó sin batería | Sus datos siguen guardados. Cárgalo, abre la app, exporta el JSON y únelo con el resto. |
+| «Este celular o navegador no tiene NFC» | Estás en iPhone, en computador o dentro de otra app. Abre en Chrome para Android. El teclado funciona igual. |
+| El permiso de NFC quedó bloqueado | Toca el candado junto a la dirección → Permisos → NFC → Permitir. |
+| La manilla no lee | Acércala al centro de la parte de atrás. La antena no está en el borde. |
+| «El dorsal no está inscrito en…» | Estás en el grupo equivocado. Míralo en la barra de arriba. |
+| Una vuelta buena se rechaza como repetida | El tiempo mínimo del grupo está muy alto. Bájalo; las vueltas ya guardadas no se tocan. |
+| Los tiempos salen con `*` | A esa salida le falta la hora. Carrera → Salidas → Corregir. |
+| El de la segunda salida aparece detrás injustamente | Estás viendo «Por llegada». Cambia a «Por tiempo». |
+| Dos profesores usaron el mismo dorsal | Al juntar los datos la app lo reporta. Arréglalo a mano y repartan rangos la próxima vez. |
+| Se apagó un celular | Sus datos siguen guardados. Cárgalo, abre la app y comparte su copia. |
 
-### Antes del evento
-
-Practica con **Ajustes → Cargar datos de prueba**: crea una tanda de ensayo con
-40 corredores en 2 oleadas separadas 35 segundos y vueltas simuladas, para ver
-cómo cambia la tabla entre tiempo neto y hora de llegada. Borra todo antes del
-día real.
+**Para practicar antes:** Ajustes → Cargar datos de prueba crea un grupo de
+ensayo con 40 corredores y 2 salidas separadas 35 segundos, para ver cómo
+cambia la tabla entre «Por tiempo» y «Por llegada». Bórralo antes del día real.

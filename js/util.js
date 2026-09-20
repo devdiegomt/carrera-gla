@@ -36,6 +36,23 @@ const Util = (() => {
     return `${p.year}-${p.month}-${p.day}_${p.hour}${p.minute}`;
   }
 
+  /**
+   * Convierte una hora de Bogotá (h, m, s) de HOY en epoch ms,
+   * aunque el reloj del sistema esté en otra zona horaria.
+   */
+  function tsDesdeHora(h, m, s) {
+    const ahora = Date.now();
+    const bog = hora(ahora).split(':').map(Number);
+    const d = new Date(ahora);
+    const segBogota = bog[0] * 3600 + bog[1] * 60 + bog[2];
+    const segSistema = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+    const desfase = (segBogota - segSistema) * 1000;
+    const medianoche = new Date(ahora);
+    medianoche.setHours(0, 0, 0, 0);
+    const objetivo = (Number(h) || 0) * 3600 + (Number(m) || 0) * 60 + (Number(s) || 0);
+    return medianoche.getTime() + objetivo * 1000 - desfase;
+  }
+
   /** Duración en h:mm:ss o mm:ss. */
   function duracion(ms) {
     if (ms == null || !isFinite(ms) || ms < 0) return '—';
@@ -72,85 +89,21 @@ const Util = (() => {
     return n;
   }
 
-  /* ---------------- avisos ---------------- */
+  /* ---------------- avisos y diálogos ----------------
+     La implementación vive en ui.js; aquí quedan los atajos que
+     usa el resto de la app.                                      */
 
-  function aviso(mensaje, tipo = '', ms = 3200) {
-    const caja = $('#avisos');
-    if (!caja) return;
-    const n = el('div', { clase: 'aviso ' + tipo, texto: mensaje });
-    caja.append(n);
-    setTimeout(() => n.remove(), ms);
-  }
+  function aviso(mensaje, tipo, ms) { UI.aviso(mensaje, tipo, ms); }
 
-  /* ---------------- modal ---------------- */
-
-  let cerrarModalActual = null;
-
-  /**
-   * Modal genérico. botones: [{texto, clase, valor}]
-   * Devuelve una promesa con el valor del botón pulsado (null si se cancela).
-   */
-  function modal(titulo, cuerpo, botones) {
-    return new Promise(resolver => {
-      const caja = $('#modal');
-      $('#modal-titulo').textContent = titulo;
-      const cuerpoN = $('#modal-cuerpo');
-      cuerpoN.innerHTML = '';
-      if (typeof cuerpo === 'string') {
-        for (const linea of cuerpo.split('\n')) cuerpoN.append(el('p', { texto: linea }));
-      } else if (cuerpo) {
-        cuerpoN.append(cuerpo);
-      }
-      const botonesN = $('#modal-botones');
-      botonesN.innerHTML = '';
-
-      const terminar = valor => {
-        caja.hidden = true;
-        cerrarModalActual = null;
-        document.removeEventListener('keydown', alPulsar);
-        resolver(valor);
-      };
-      cerrarModalActual = () => terminar(null);
-
-      for (const b of botones) {
-        botonesN.append(el('button', {
-          clase: 'btn ' + (b.clase || 'btn-secundario'),
-          type: 'button',
-          texto: b.texto,
-          onclick: () => terminar(b.valor)
-        }));
-      }
-
-      const alPulsar = ev => { if (ev.key === 'Escape') terminar(null); };
-      document.addEventListener('keydown', alPulsar);
-
-      caja.hidden = false;
-      const primero = botonesN.querySelector('button');
-      if (primero) primero.focus();
+  function confirmar(titulo, mensaje, textoConfirmar, peligro) {
+    return UI.confirmar({
+      titulo, mensaje,
+      confirmar: textoConfirmar || 'Continuar',
+      peligro: peligro !== false
     });
   }
 
-  // Tocar fuera de la caja cancela el modal.
-  document.addEventListener('DOMContentLoaded', () => {
-    const caja = $('#modal');
-    if (!caja) return;
-    caja.addEventListener('click', ev => {
-      if (ev.target === caja && cerrarModalActual) cerrarModalActual();
-    });
-  });
-
-  /** Confirmación explícita para acciones destructivas. */
-  async function confirmar(titulo, mensaje, textoConfirmar = 'Sí, continuar', peligro = true) {
-    const r = await modal(titulo, mensaje, [
-      { texto: textoConfirmar, clase: peligro ? 'btn-peligro' : 'btn-primario', valor: true },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
-    ]);
-    return r === true;
-  }
-
-  function alerta(titulo, mensaje) {
-    return modal(titulo, mensaje, [{ texto: 'Entendido', clase: 'btn-primario', valor: true }]);
-  }
+  function alerta(titulo, mensaje) { return UI.alerta({ titulo, mensaje }); }
 
   /* ---------------- sonido y vibración ---------------- */
 
@@ -227,7 +180,8 @@ const Util = (() => {
 
   function descargar(nombre, contenido, mime) {
     try {
-      const blob = new Blob([contenido], { type: mime + ';charset=utf-8' });
+      const esTexto = typeof contenido === 'string';
+      const blob = new Blob([contenido], { type: esTexto ? mime + ';charset=utf-8' : mime });
       const url = URL.createObjectURL(blob);
       const a = el('a', { href: url, download: nombre });
       document.body.append(a);
@@ -243,14 +197,15 @@ const Util = (() => {
   }
 
   async function compartir(nombre, contenido, mime) {
-    const blob = new Blob([contenido], { type: mime + ';charset=utf-8' });
+    const esTexto = typeof contenido === 'string';
+    const blob = new Blob([contenido], { type: esTexto ? mime + ';charset=utf-8' : mime });
     const archivo = new File([blob], nombre, { type: mime });
     try {
       if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
         await navigator.share({ files: [archivo], title: nombre });
         return true;
       }
-      if (navigator.share) {
+      if (navigator.share && esTexto) {
         await navigator.share({ title: nombre, text: contenido.slice(0, 4000) });
         return true;
       }
@@ -312,8 +267,8 @@ const Util = (() => {
   }
 
   return {
-    ZONA, hora, horaCorta, fecha, selloArchivo, duracion, limpiarNombreArchivo,
-    $, $$, el, aviso, modal, confirmar, alerta,
+    ZONA, hora, horaCorta, fecha, selloArchivo, duracion, limpiarNombreArchivo, tsDesdeHora,
+    $, $$, el, aviso, confirmar, alerta,
     prepararAudio, retro, vibrar,
     csv, csvCampo, descargar, compartir, copiar, leerArchivo,
     esWebView, idAleatorio

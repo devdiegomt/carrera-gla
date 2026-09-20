@@ -6,7 +6,7 @@
    ============================================================ */
 'use strict';
 
-const VERSION = 'v2.0.0';
+const VERSION = 'v3.0.0';
 const CACHE = 'carrera-vueltas-' + VERSION;
 
 const RECURSOS = [
@@ -15,6 +15,8 @@ const RECURSOS = [
   './styles.css',
   './manifest.json',
   './js/util.js',
+  './js/ui.js',
+  './js/excel.js',
   './js/db.js',
   './js/estado.js',
   './js/nfc.js',

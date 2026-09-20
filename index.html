@@ -2,9 +2,9 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
-<meta name="theme-color" content="#0b3d2e" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#06231a" media="(prefers-color-scheme: dark)">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15624a" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e110e" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Registro de vueltas por NFC para carreras escolares. Funciona sin conexion.">
 <meta name="mobile-web-app-capable" content="yes">
@@ -19,391 +19,62 @@
 </head>
 <body>
 
-<div id="aviso-webview" class="aviso-global" hidden>
-  <div>
-    <strong>Estás en un navegador incrustado.</strong>
-    El NFC no funciona aquí. Abre esta página en Chrome: toca el menú (⋮) y elige «Abrir en Chrome».
+<header class="app-cabecera">
+  <div class="recorta" style="flex:1">
+    <div class="app-cabecera__titulo" id="cab-titulo">Carrera</div>
+    <div class="app-cabecera__sub" id="cab-sub"></div>
   </div>
-  <button class="cerrar-aviso" type="button" aria-label="Cerrar aviso">✕</button>
-</div>
-
-<header id="cabecera">
-  <div class="cabecera-titulo">
-    <h1 id="titulo-carrera">Carrera</h1>
-    <p id="subtitulo-carrera">Puesto — Dispositivo</p>
-  </div>
-  <div class="cabecera-reloj" id="reloj-cabecera">--:--:--</div>
+  <div class="app-cabecera__reloj" id="cab-reloj">--:--:--</div>
 </header>
 
-<div id="barra-tanda" class="barra-tanda">
-  <span class="barra-tanda-etq">Tanda</span>
-  <select id="sel-tanda" aria-label="Tanda activa"></select>
-  <span id="barra-tanda-info" class="barra-tanda-info"></span>
-</div>
+<button class="barra-grupo" id="barra-grupo" type="button">
+  <span class="barra-grupo__etq">Grupo</span>
+  <span class="barra-grupo__nombre" id="barra-grupo-nombre">—</span>
+  <span class="barra-grupo__dato" id="barra-grupo-dato"></span>
+</button>
 
-<main id="contenido">
+<main class="contenido">
 
-<!-- ================= 1. CARRERA ================= -->
-<section id="vista-carrera" class="vista activa" aria-label="Carrera">
-
-  <div id="panel-resultado" class="panel-resultado estado-espera" role="status" aria-live="assertive">
-    <div class="res-dorsal" id="res-dorsal">···</div>
-    <div class="res-nombre" id="res-nombre">Listo para leer</div>
-    <div class="res-vuelta" id="res-vuelta">Activa la lectura NFC o usa el teclado</div>
-    <div class="res-hora" id="res-hora"></div>
-  </div>
-
-  <button id="btn-nfc" class="btn btn-gigante btn-primario" type="button">
-    <span class="btn-icono">📡</span><span id="btn-nfc-texto">Activar lectura NFC</span>
-  </button>
-  <p id="nfc-estado" class="nota"></p>
-
-  <div class="fila-acciones">
-    <button id="btn-sin-identificar" class="btn btn-secundario" type="button">➕ Marcar sin identificar</button>
-    <button id="btn-deshacer" class="btn btn-peligro-suave" type="button" disabled>↩ Deshacer último</button>
-  </div>
-
-  <details id="det-salidas" class="tarjeta" open>
-    <summary class="tarjeta-titulo">🚦 Salidas <span class="chip" id="chip-salidas">0/0</span></summary>
-    <p class="nota">Pulsa en el momento exacto del disparo de cada oleada. El tiempo de cada
-      corredor se cuenta desde la salida de SU oleada, no desde la primera.</p>
-    <div id="lista-salidas" class="lista"></div>
-  </details>
-
-  <details id="det-teclado" class="tarjeta">
-    <summary class="tarjeta-titulo">⌨️ Teclado de respaldo</summary>
-    <div class="teclado-visor"><span id="teclado-digitos">—</span></div>
-    <p class="nota" id="teclado-ayuda"></p>
-    <div class="teclado" id="teclado"></div>
-  </details>
-
-  <details id="det-pendientes" class="tarjeta">
-    <summary class="tarjeta-titulo">⏱️ Marcas pendientes <span class="chip" id="chip-pendientes">0</span></summary>
-    <p class="nota">Cada marca conserva su hora original. Escribe el dorsal cuando lo identifiques.</p>
-    <div id="lista-pendientes" class="lista"></div>
-  </details>
-
-  <details class="tarjeta" open>
-    <summary class="tarjeta-titulo">📜 Últimas 10 lecturas</summary>
-    <div id="historial" class="lista"></div>
-  </details>
-
-</section>
-
-<!-- ================= 2. INSCRIPCION ================= -->
-<section id="vista-inscripcion" class="vista" aria-label="Inscripción">
-
-  <div class="tarjeta tarjeta-destacada">
-    <h2 class="tarjeta-titulo">⚡ Inscripción exprés por manilla</h2>
-    <p class="nota">La forma rápida de repartir manillas reutilizadas: acerca la manilla,
-      la app reconoce a quién perteneció antes y propone su mismo dorsal. Solo escribes el nombre.</p>
-    <button id="btn-expres" class="btn btn-gigante btn-primario" type="button">
-      <span class="btn-icono">📡</span><span id="btn-expres-texto">Escanear manilla e inscribir</span>
-    </button>
-    <p id="expres-estado" class="nota"></p>
-    <div id="expres-form" hidden>
-      <div class="expres-chip" id="expres-chip"></div>
-      <div id="expres-historial" class="previa" hidden></div>
-      <div class="campo">
-        <label for="ex-dorsal">Dorsal</label>
-        <input id="ex-dorsal" type="number" inputmode="numeric" min="1" step="1">
-      </div>
-      <div class="campo">
-        <label for="ex-nombre">Nombre</label>
-        <input id="ex-nombre" type="text" maxlength="80" autocapitalize="words">
-      </div>
-      <div class="fila-acciones">
-        <div class="campo">
-          <label for="ex-categoria">Categoría</label>
-          <input id="ex-categoria" type="text" list="lista-categorias" maxlength="40" autocapitalize="words">
-        </div>
-        <div class="campo">
-          <label for="ex-oleada">Oleada</label>
-          <select id="ex-oleada"></select>
-        </div>
-      </div>
-      <div class="fila-acciones">
-        <button id="btn-expres-guardar" class="btn btn-primario" type="button">✅ Guardar y seguir</button>
-        <button id="btn-expres-cancelar" class="btn btn-secundario" type="button">Descartar</button>
-      </div>
+  <!-- ============ CARRERA ============ -->
+  <section class="vista esta-activa" id="vista-carrera" aria-label="Carrera">
+    <div class="panel panel--espera" id="panel" role="status" aria-live="assertive">
+      <div class="panel__dorsal" id="panel-dorsal">—</div>
+      <div class="panel__nombre" id="panel-nombre">Listo para leer</div>
+      <div class="panel__detalle" id="panel-detalle">Activa la lectura y acerca una manilla</div>
+      <div class="panel__pie" id="panel-pie"></div>
     </div>
-  </div>
 
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">➕ Inscribir a mano</h2>
-    <p class="nota" id="nota-rango"></p>
-    <form id="form-corredor" autocomplete="off">
-      <div class="campo">
-        <label for="in-dorsal">Dorsal</label>
-        <input id="in-dorsal" type="number" inputmode="numeric" min="1" step="1" required>
-      </div>
-      <div class="campo">
-        <label for="in-nombre">Nombre</label>
-        <input id="in-nombre" type="text" required maxlength="80" autocapitalize="words">
-      </div>
-      <div class="fila-acciones">
-        <div class="campo">
-          <label for="in-categoria">Categoría</label>
-          <input id="in-categoria" type="text" list="lista-categorias" maxlength="40" autocapitalize="words">
-          <datalist id="lista-categorias"></datalist>
-        </div>
-        <div class="campo">
-          <label for="in-oleada">Oleada</label>
-          <select id="in-oleada"></select>
-        </div>
-      </div>
-      <button class="btn btn-primario" type="submit">Guardar corredor</button>
-    </form>
-  </div>
+    <div id="carrera-acciones"></div>
+    <div id="carrera-bloques" class="pila"></div>
+  </section>
 
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🔗 Vincular manilla a un dorsal</h2>
-    <p class="nota">Cuando el corredor ya está inscrito y solo falta asignarle la manilla.</p>
-    <div class="campo">
-      <label for="in-vincular-dorsal">Dorsal a vincular</label>
-      <input id="in-vincular-dorsal" type="number" inputmode="numeric" min="1" step="1">
-    </div>
-    <button id="btn-vincular" class="btn btn-primario" type="button">Vincular manilla</button>
-    <p id="vincular-estado" class="nota"></p>
-  </div>
+  <!-- ============ INSCRIPCIÓN ============ -->
+  <section class="vista" id="vista-inscripcion" aria-label="Inscripción">
+    <div id="inscripcion-agregar"></div>
+    <div id="inscripcion-lista"></div>
+  </section>
 
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">📋 Carga masiva</h2>
-    <p class="nota">Una línea por corredor: <code>dorsal,nombre,categoria,oleada</code>
-      (la oleada es opcional: número o nombre).</p>
-    <textarea id="in-masiva" rows="6" placeholder="101,María Gómez,Infantil,1"></textarea>
-    <div class="fila-acciones">
-      <button id="btn-previa-masiva" class="btn btn-secundario" type="button">Vista previa</button>
-      <button id="btn-confirmar-masiva" class="btn btn-primario" type="button" disabled>Confirmar carga</button>
-    </div>
-    <div id="previa-masiva" class="previa" hidden></div>
-  </div>
+  <!-- ============ POSICIONES ============ -->
+  <section class="vista" id="vista-posiciones" aria-label="Posiciones">
+    <div id="posiciones-cifras"></div>
+    <div id="posiciones-controles"></div>
+    <div id="posiciones-lista"></div>
+  </section>
 
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">👥 Inscritos <span class="chip" id="chip-inscritos">0</span></h2>
-    <p class="nota" id="nota-inscritos"></p>
-    <input id="buscar-corredor" type="search" placeholder="Buscar por dorsal, nombre o categoría" autocomplete="off">
-    <div class="fila-acciones">
-      <button id="btn-filtro-sinchip" class="btn btn-secundario" type="button">Ver solo sin manilla</button>
-      <button id="btn-filtro-todos" class="btn btn-secundario" type="button">Ver todos</button>
-    </div>
-    <div id="lista-corredores" class="lista"></div>
-  </div>
-
-</section>
-
-<!-- ================= 3. POSICIONES ================= -->
-<section id="vista-posiciones" class="vista" aria-label="Posiciones">
-
-  <div class="contadores">
-    <div class="contador"><span class="contador-num" id="cnt-inscritos">0</span><span class="contador-etq">Inscritos</span></div>
-    <div class="contador"><span class="contador-num" id="cnt-vueltas">0</span><span class="contador-etq">Vueltas</span></div>
-    <div class="contador"><span class="contador-num" id="cnt-terminados">0</span><span class="contador-etq">Terminados</span></div>
-  </div>
-
-  <div class="tarjeta">
-    <div class="fila-acciones">
-      <div class="campo">
-        <label for="filtro-categoria">Categoría</label>
-        <select id="filtro-categoria"><option value="">Todas</option></select>
-      </div>
-      <div class="campo">
-        <label for="filtro-oleada">Oleada</label>
-        <select id="filtro-oleada"><option value="">Todas</option></select>
-      </div>
-    </div>
-    <div class="campo">
-      <label for="sel-orden">Ordenar por</label>
-      <select id="sel-orden">
-        <option value="neto">Tiempo neto (descuenta la salida de cada oleada)</option>
-        <option value="llegada">Hora de llegada (orden en la meta)</option>
-      </select>
-    </div>
-    <button id="btn-refrescar-pos" class="btn btn-secundario" type="button">🔄 Actualizar</button>
-  </div>
-
-  <div id="aviso-posiciones" class="aviso-linea" hidden></div>
-  <div id="tabla-posiciones" class="tabla-envoltura"></div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">📤 Exportar</h2>
-    <div class="campo">
-      <label for="sel-exportar">Qué exportar</label>
-      <select id="sel-exportar">
-        <option value="pos-csv">Posiciones (CSV)</option>
-        <option value="ev-csv">Eventos (CSV)</option>
-        <option value="padron-csv">Padrón con manillas (CSV)</option>
-        <option value="json">Respaldo completo (JSON)</option>
-      </select>
-    </div>
-    <div class="campo">
-      <label for="sel-alcance">Alcance</label>
-      <select id="sel-alcance">
-        <option value="activa">Solo la tanda activa</option>
-        <option value="todas">Todas las tandas</option>
-      </select>
-    </div>
-    <div class="fila-acciones tres">
-      <button id="btn-exp-descargar" class="btn btn-primario" type="button">⬇️ Descargar</button>
-      <button id="btn-exp-compartir" class="btn btn-secundario" type="button">📨 Compartir</button>
-      <button id="btn-exp-copiar" class="btn btn-secundario" type="button">📋 Copiar</button>
-    </div>
-    <p class="nota">Los datos solo salen del dispositivo cuando tú exportas. Contienen nombres
-      de menores de edad: compártelos únicamente por canales autorizados por el colegio.</p>
-  </div>
-
-</section>
-
-<!-- ================= 4. AJUSTES ================= -->
-<section id="vista-ajustes" class="vista" aria-label="Ajustes">
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🗂️ Tandas</h2>
-    <p class="nota">Cada tanda es un grupo que corre junto. Los dorsales y las manillas se
-      reutilizan entre tandas sin mezclar los datos.</p>
-    <div id="lista-tandas" class="lista"></div>
-    <hr>
-    <button id="btn-nueva-tanda" class="btn btn-primario" type="button">➕ Nueva tanda</button>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🚦 Oleadas de <span id="nombre-tanda-oleadas"></span></h2>
-    <p class="nota">Si el grupo sale escalonado, crea una oleada por salida y asigna a cada
-      corredor la suya. La hora de salida se marca en la pestaña Carrera.</p>
-    <div id="lista-oleadas" class="lista"></div>
-    <hr>
-    <button id="btn-nueva-oleada" class="btn btn-secundario" type="button">➕ Añadir oleada</button>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">⚙️ Configuración</h2>
-    <form id="form-config" autocomplete="off">
-      <div class="campo">
-        <label for="cfg-tanda-nombre">Nombre de la tanda activa</label>
-        <input id="cfg-tanda-nombre" type="text" maxlength="40">
-      </div>
-      <div class="campo">
-        <label for="cfg-vueltas">Vueltas para terminar</label>
-        <input id="cfg-vueltas" type="number" inputmode="numeric" min="1" max="99" step="1">
-        <p class="nota">Es de esta tanda. Cambiarlo recalcula la tabla; nunca borra eventos.</p>
-      </div>
-      <div class="campo">
-        <label for="cfg-ventana">Ventana mínima entre vueltas (segundos)</label>
-        <input id="cfg-ventana" type="number" inputmode="numeric" min="1" max="3600" step="1">
-        <p class="nota">Una lectura del mismo dorsal dentro de esta ventana se descarta, venga del celular que venga.</p>
-      </div>
-      <hr>
-      <div class="campo">
-        <label for="cfg-nombre">Nombre del evento</label>
-        <input id="cfg-nombre" type="text" maxlength="60">
-      </div>
-      <div class="campo">
-        <label for="cfg-digitos">Dígitos del dorsal</label>
-        <input id="cfg-digitos" type="number" inputmode="numeric" min="1" max="6" step="1">
-      </div>
-      <div class="campo">
-        <label for="cfg-puesto">Nombre del puesto</label>
-        <input id="cfg-puesto" type="text" maxlength="40" placeholder="Meta izquierda">
-      </div>
-      <div class="campo">
-        <label for="cfg-dispositivo">Identificador del dispositivo</label>
-        <input id="cfg-dispositivo" type="text" maxlength="40" placeholder="CEL-1">
-        <p class="nota">Debe ser distinto en cada celular. Aparece en cada evento exportado.</p>
-      </div>
-      <div class="fila-acciones">
-        <div class="campo">
-          <label for="cfg-rango-desde">Inscribe dorsales desde</label>
-          <input id="cfg-rango-desde" type="number" inputmode="numeric" min="1" step="1" placeholder="sin límite">
-        </div>
-        <div class="campo">
-          <label for="cfg-rango-hasta">hasta</label>
-          <input id="cfg-rango-hasta" type="number" inputmode="numeric" min="1" step="1" placeholder="sin límite">
-        </div>
-      </div>
-      <p class="nota">Reparte un rango distinto a cada organizador (CEL-1: 1–100, CEL-2: 101–200…).
-        Así varios inscriben a la vez sin pisarse los dorsales.</p>
-      <button class="btn btn-primario" type="submit">Guardar configuración</button>
-    </form>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🕐 Verificar hora</h2>
-    <p class="nota">Compara este reloj entre todos los celulares antes de arrancar. Una
-      diferencia de segundos daña la deduplicación y los tiempos netos.</p>
-    <div class="reloj-gigante" id="reloj-gigante">--:--:--</div>
-    <div class="reloj-fecha" id="reloj-fecha"></div>
-    <p class="nota" id="reloj-zona"></p>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">📇 Padrón de corredores</h2>
-    <p class="nota">El padrón lleva la tanda dentro: al importarlo, todos los organizadores
-      quedan inscribiendo sobre la misma tanda y la unión posterior no tiene que adivinar nada.</p>
-    <div class="campo">
-      <label for="sel-alcance-padron">Alcance</label>
-      <select id="sel-alcance-padron">
-        <option value="activa">Solo la tanda activa</option>
-        <option value="todas">Todas las tandas</option>
-      </select>
-    </div>
-    <div class="fila-acciones tres">
-      <button id="btn-padron-descargar" class="btn btn-primario" type="button">⬇️ Exportar</button>
-      <button id="btn-padron-compartir" class="btn btn-secundario" type="button">📨 Compartir</button>
-      <button id="btn-padron-copiar" class="btn btn-secundario" type="button">📋 Copiar</button>
-    </div>
-    <hr>
-    <label class="btn btn-secundario btn-archivo" for="file-padron">📥 Importar padrón desde archivo</label>
-    <input id="file-padron" type="file" accept="application/json,.json" hidden>
-    <div id="resumen-padron" class="previa" hidden></div>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🔀 Unir dispositivos</h2>
-    <p class="nota">Carga los archivos JSON exportados por cada celular. Se aplica la
-      deduplicación global por tanda y se recalcula la tabla final.</p>
-    <label class="btn btn-primario btn-archivo" for="file-union">📥 Cargar archivos JSON</label>
-    <input id="file-union" type="file" accept="application/json,.json" multiple hidden>
-    <div id="resumen-union" class="previa" hidden></div>
-    <button id="btn-deshacer-union" class="btn btn-peligro-suave" type="button" hidden>↩ Deshacer la última unión</button>
-  </div>
-
-  <div class="tarjeta">
-    <h2 class="tarjeta-titulo">🩺 Diagnóstico</h2>
-    <div id="diagnostico" class="lista"></div>
-    <button id="btn-diagnostico" class="btn btn-secundario" type="button">🔄 Volver a comprobar</button>
-  </div>
-
-  <div class="tarjeta tarjeta-peligro">
-    <h2 class="tarjeta-titulo">⚠️ Zona de riesgo</h2>
-    <button id="btn-demo" class="btn btn-secundario" type="button">🧪 Cargar datos de prueba</button>
-    <button id="btn-borrar-vueltas" class="btn btn-peligro" type="button">🧹 Borrar las vueltas de esta tanda</button>
-    <button id="btn-borrar-todo" class="btn btn-peligro" type="button">🔥 Borrar todo</button>
-  </div>
-
-  <p class="pie" id="pie-version"></p>
-
-</section>
+  <!-- ============ AJUSTES ============ -->
+  <section class="vista" id="vista-ajustes" aria-label="Ajustes">
+    <div id="ajustes-contenido"></div>
+  </section>
 
 </main>
 
-<nav id="nav" aria-label="Navegación principal">
-  <button class="nav-btn activa" data-vista="carrera" type="button" aria-label="Carrera"><span class="nav-icono">🏁</span><span>Carrera</span></button>
-  <button class="nav-btn" data-vista="inscripcion" type="button" aria-label="Inscripción"><span class="nav-icono">📝</span><span>Inscripción</span></button>
-  <button class="nav-btn" data-vista="posiciones" type="button" aria-label="Posiciones"><span class="nav-icono">🏆</span><span>Posiciones</span></button>
-  <button class="nav-btn" data-vista="ajustes" type="button" aria-label="Ajustes"><span class="nav-icono">⚙️</span><span>Ajustes</span></button>
-</nav>
+<nav class="app-nav" id="app-nav" aria-label="Secciones"></nav>
 
-<div id="avisos" class="avisos" aria-live="polite"></div>
-
-<div id="modal" class="modal" hidden>
-  <div class="modal-caja" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
-    <h2 id="modal-titulo"></h2>
-    <div id="modal-cuerpo"></div>
-    <div class="modal-botones" id="modal-botones"></div>
-  </div>
-</div>
+<div class="avisos" id="avisos" aria-live="polite"></div>
 
 <script src="js/util.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/excel.js"></script>
 <script src="js/db.js"></script>
 <script src="js/estado.js"></script>
 <script src="js/nfc.js"></script>

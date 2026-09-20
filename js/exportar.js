@@ -205,7 +205,7 @@ const Exportar = (() => {
   function normalizarTandaImportada(t) {
     const out = {
       id: String(t.id || ''),
-      nombre: String(t.nombre || t.id || 'Tanda'),
+      nombre: String(t.nombre || t.id || 'Grupo'),
       vueltas: Number(t.vueltas) || 5,
       ventanaMinSeg: Number(t.ventanaMinSeg) || 60,
       estado: t.estado === 'cerrada' ? 'cerrada' : 'abierta',
@@ -213,10 +213,10 @@ const Exportar = (() => {
       oleadas: Array.isArray(t.oleadas) && t.oleadas.length
         ? t.oleadas.map((o, i) => ({
             id: Number(o.id) || i + 1,
-            nombre: String(o.nombre || 'Oleada ' + (i + 1)),
+            nombre: String(o.nombre || 'Salida ' + (i + 1)),
             horaSalida: Number(o.horaSalida) || null
           }))
-        : [{ id: 1, nombre: 'Oleada 1', horaSalida: null }]
+        : [{ id: 1, nombre: 'Salida 1', horaSalida: null }]
     };
     return out.id ? out : null;
   }
@@ -251,7 +251,7 @@ const Exportar = (() => {
       tandaPorDefecto = 'T-1';
       tandas = [normalizarTandaImportada({
         id: tandaPorDefecto,
-        nombre: (datos.config && datos.config.nombreCarrera) || 'Tanda importada',
+        nombre: (datos.config && datos.config.nombreCarrera) || 'Grupo importado',
         vueltas: (datos.config && datos.config.vueltas) || 5,
         ventanaMinSeg: (datos.config && datos.config.ventanaMinSeg) || 60
       })];

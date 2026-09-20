@@ -1,5 +1,6 @@
 /* ============================================================
-   app.js — arranque, navegación, Wake Lock y service worker.
+   app.js — arranque, navegación, pantalla encendida y modo sin
+   conexión.
    ============================================================ */
 'use strict';
 
@@ -8,38 +9,61 @@ const App = (() => {
   const $ = Util.$;
   const est = Estado.est;
 
+  const SECCIONES = [
+    { id: 'carrera', texto: 'Carrera', icono: 'bandera' },
+    { id: 'inscripcion', texto: 'Inscritos', icono: 'persona' },
+    { id: 'posiciones', texto: 'Resultados', icono: 'podio' },
+    { id: 'ajustes', texto: 'Ajustes', icono: 'ajustes' }
+  ];
+
   let vistaActual = 'carrera';
-  let bloqueoPantalla = null;
+  let bloqueo = null;
   let quiereBloqueo = false;
 
   /* ---------------- navegación ---------------- */
 
+  function construirNav() {
+    const nav = $('#app-nav');
+    nav.innerHTML = '';
+    for (const s of SECCIONES) {
+      nav.append(UI.el('button', {
+        type: 'button',
+        clase: 'app-nav__btn' + (s.id === vistaActual ? ' esta-activa' : ''),
+        datos: { vista: s.id },
+        'aria-label': s.texto,
+        onclick: () => { Util.prepararAudio(); irA(s.id); }
+      }, [UI.icono(s.icono), UI.el('span', { texto: s.texto })]));
+    }
+  }
+
   function irA(vista) {
     vistaActual = vista;
-    for (const s of Util.$$('.vista')) s.classList.toggle('activa', s.id === 'vista-' + vista);
-    for (const b of Util.$$('.nav-btn')) b.classList.toggle('activa', b.dataset.vista === vista);
+    for (const s of Util.$$('.vista')) s.classList.toggle('esta-activa', s.id === 'vista-' + vista);
+    for (const b of Util.$$('.app-nav__btn')) {
+      b.classList.toggle('esta-activa', b.dataset.vista === vista);
+    }
     window.scrollTo(0, 0);
 
     if (vista === 'carrera') Carrera.refrescar(false);
-    if (vista === 'inscripcion') { Inscripcion.sincronizarExpres(); Inscripcion.refrescar(); }
+    if (vista === 'inscripcion') { Inscripcion.sincronizar(); Inscripcion.refrescar(); }
     if (vista === 'posiciones') Posiciones.refrescar();
-    if (vista === 'ajustes') { Ajustes.refrescar(); Ajustes.pintarReloj(); Tandas.refrescar(); }
+    if (vista === 'ajustes') Ajustes.refrescar();
   }
 
-  /** Repinta lo que dependa de los datos tras cualquier cambio. */
+  /** Algo cambió en los datos del grupo activo. */
   function datosCambiaron() {
     pintarCabecera();
     Tandas.pintarBarra();
     if (vistaActual === 'posiciones') Posiciones.refrescar();
     if (vistaActual === 'inscripcion') Inscripcion.refrescar();
     if (vistaActual === 'carrera') { Carrera.pintarPendientes(); Carrera.pintarSalidas(); }
-    if (vistaActual === 'ajustes') Tandas.pintarListaTandas();
+    if (vistaActual === 'ajustes') Ajustes.refrescar();
   }
 
-  /** Cambió la tanda activa (o se recargaron las tandas): repinta todo. */
+  /** Cambió el grupo activo o se recargó todo: repintar sin excepción. */
   function tandaCambio() {
     pintarCabecera();
-    Tandas.refrescar();
+    Tandas.pintarBarra();
     Carrera.refrescar();
     Inscripcion.alCambiarTanda();
     Posiciones.refrescar();
@@ -47,48 +71,44 @@ const App = (() => {
   }
 
   function pintarCabecera() {
-    $('#titulo-carrera').textContent = est.config.nombreCarrera || 'Carrera';
+    $('#cab-titulo').textContent = est.config.nombreCarrera || 'Carrera';
     const t = est.tandaActiva;
-    $('#subtitulo-carrera').textContent =
-      (est.config.nombrePuesto || 'Meta') + ' · ' + (est.config.idDispositivo || '—') +
-      (t ? ' · ' + t.vueltas + ' vueltas' : '');
+    $('#cab-sub').textContent = (est.config.nombrePuesto || 'Meta') +
+      ' · ' + (est.config.idDispositivo || '') +
+      (t ? ' · ' + t.vueltas + (t.vueltas === 1 ? ' vuelta' : ' vueltas') : '');
   }
 
   /* ---------------- reloj ---------------- */
 
   function arrancarReloj() {
-    const tic = () => {
-      $('#reloj-cabecera').textContent = Util.hora(Date.now());
-      if (vistaActual === 'ajustes') Ajustes.pintarReloj();
-    };
+    const tic = () => { $('#cab-reloj').textContent = Util.hora(Date.now()); };
     tic();
     setInterval(tic, 1000);
   }
 
-  /* ---------------- Wake Lock ---------------- */
+  /* ---------------- pantalla encendida ---------------- */
 
   async function mantenerPantalla() {
     quiereBloqueo = true;
     if (!('wakeLock' in navigator)) return;
     try {
-      if (bloqueoPantalla) return;
-      bloqueoPantalla = await navigator.wakeLock.request('screen');
-      bloqueoPantalla.addEventListener('release', () => { bloqueoPantalla = null; });
+      if (bloqueo) return;
+      bloqueo = await navigator.wakeLock.request('screen');
+      bloqueo.addEventListener('release', () => { bloqueo = null; });
     } catch (_) { /* el sistema puede negarlo con batería baja */ }
   }
 
   function soltarPantalla() {
     quiereBloqueo = false;
-    try { if (bloqueoPantalla) bloqueoPantalla.release(); } catch (_) { /* ignorar */ }
-    bloqueoPantalla = null;
+    try { if (bloqueo) bloqueo.release(); } catch (_) { /* ignorar */ }
+    bloqueo = null;
   }
 
-  // Al volver del segundo plano el bloqueo se pierde: hay que rehacerlo.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && quiereBloqueo) mantenerPantalla();
   });
 
-  /* ---------------- service worker ---------------- */
+  /* ---------------- modo sin conexión ---------------- */
 
   function registrarSW() {
     if (!('serviceWorker' in navigator)) return;
@@ -98,16 +118,13 @@ const App = (() => {
         if (!nuevo) return;
         nuevo.addEventListener('statechange', () => {
           if (nuevo.state === 'installed' && navigator.serviceWorker.controller) {
-            Util.aviso('Hay una versión nueva. Cierra y vuelve a abrir la app para usarla.', '', 6000);
+            UI.aviso('Hay una versión nueva. Cierra y vuelve a abrir la app.', 'neutro', 6000);
           }
         });
       });
-    }).catch(() => {
-      Util.aviso('No se pudo preparar el modo sin conexión.', 'error');
-    });
+    }).catch(() => { /* sin modo sin conexión; la app igual funciona */ });
   }
 
-  // Se engancha al evento load si aún no ocurrió; si ya pasó, registra de una vez.
   function programarSW() {
     if (document.readyState === 'complete') registrarSW();
     else window.addEventListener('load', registrarSW, { once: true });
@@ -116,27 +133,24 @@ const App = (() => {
   /* ---------------- arranque ---------------- */
 
   async function iniciar() {
-    // El modo sin conexión no depende de la base de datos: se prepara ya.
     programarSW();
+    construirNav();
 
-    // Navegación
-    for (const b of Util.$$('.nav-btn')) {
-      b.addEventListener('click', () => { Util.prepararAudio(); irA(b.dataset.vista); });
-    }
-
-    // Aviso de navegador incrustado
     if (Util.esWebView()) {
-      const aviso = $('#aviso-webview');
-      aviso.hidden = false;
-      aviso.querySelector('.cerrar-aviso').addEventListener('click', () => { aviso.hidden = true; });
+      UI.alerta({
+        titulo: 'Ábrela en Chrome',
+        mensaje: 'Estás viendo la app dentro de otra aplicación (WhatsApp, Gmail…) y así el NFC ' +
+                 'no funciona.\nToca el menú de tres puntos y elige «Abrir en Chrome».'
+      });
     }
 
     try {
       await DB.abrir();
     } catch (e) {
-      await Util.alerta('No se pudo abrir el almacenamiento',
-        e.message + '\nSi estás en modo incógnito o con el almacenamiento bloqueado, ' +
-        'la app no podrá guardar las vueltas. Abre la página en una ventana normal de Chrome.');
+      await UI.alerta({
+        titulo: 'No se pueden guardar los datos',
+        mensaje: e.message + '\nSi estás en una ventana de incógnito, ábrela en una ventana normal de Chrome.'
+      });
       return;
     }
 
@@ -151,15 +165,9 @@ const App = (() => {
     await Ajustes.iniciar();
     arrancarReloj();
 
-    $('#pie-version').textContent =
-      'Registro de Vueltas · esquema de datos v' + DB.ESQUEMA +
-      ' · los datos se quedan en este dispositivo';
-
-    // Evita cerrar la pestaña por accidente durante la carrera.
     window.addEventListener('beforeunload', ev => {
       if (NFC.estaActivo()) { ev.preventDefault(); ev.returnValue = ''; }
     });
-
   }
 
   document.addEventListener('DOMContentLoaded', iniciar);

@@ -1,5 +1,9 @@
 /* ============================================================
-   posiciones.js — tabla de posiciones, contadores y exportación.
+   posiciones.js — resultados.
+
+   En un celular una tabla obliga a desplazarse de lado y el
+   profesor pierde de vista quién va ganando. Aquí cada corredor
+   es una tarjeta que cabe completa en la pantalla.
    ============================================================ */
 'use strict';
 
@@ -10,153 +14,316 @@ const Posiciones = (() => {
 
   let categoria = '';
   let oleadaId = 0;
-  let modo = 'neto';
+  let orden = 'neto';
 
-  function pintarContadores() {
+  let cajaCifras, cajaControles, cajaLista;
+
+  /* ================= cifras ================= */
+
+  function pintarCifras() {
     const r = Estado.resumen();
-    $('#cnt-inscritos').textContent = String(r.inscritos);
-    $('#cnt-vueltas').textContent = String(r.vueltas);
-    $('#cnt-terminados').textContent = String(r.terminados);
+    cajaCifras.innerHTML = '';
+    const caja = UI.el('div', { clase: 'cifras' });
+    for (const [num, etq] of [[r.inscritos, 'Inscritos'], [r.vueltas, 'Vueltas'], [r.terminados, 'Terminaron']]) {
+      caja.append(UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: String(num) }),
+        UI.el('span', { clase: 'cifra__etq', texto: etq })
+      ]));
+    }
+    cajaCifras.append(caja);
   }
 
-  function pintarFiltros() {
-    const selCat = $('#filtro-categoria');
-    const cats = Estado.categorias();
-    selCat.innerHTML = '';
-    selCat.append(Util.el('option', { value: '', texto: 'Todas' }));
-    for (const c of cats) selCat.append(Util.el('option', { value: c, texto: c }));
-    selCat.value = cats.includes(categoria) ? categoria : '';
-    categoria = selCat.value;
+  /* ================= controles ================= */
 
-    const selOl = $('#filtro-oleada');
-    const oleadas = Estado.oleadas();
-    selOl.innerHTML = '';
-    selOl.append(Util.el('option', { value: '', texto: 'Todas' }));
-    for (const o of oleadas) selOl.append(Util.el('option', { value: String(o.id), texto: o.nombre }));
-    selOl.value = oleadas.some(o => o.id === oleadaId) ? String(oleadaId) : '';
-    oleadaId = Number(selOl.value) || 0;
-
-    $('#sel-orden').value = modo;
+  function filtrosActivos() {
+    let n = 0;
+    if (categoria) n++;
+    if (oleadaId) n++;
+    return n;
   }
 
-  function pintarAviso() {
-    const caja = $('#aviso-posiciones');
-    const oleadas = Estado.oleadas();
-    const sinSalida = oleadas.filter(o => !o.horaSalida);
+  function pintarControles() {
+    cajaControles.innerHTML = '';
+    const salidas = Estado.oleadas();
 
-    if (!est.totalEventos) { caja.hidden = true; return; }
+    const seg = UI.segmentado({
+      opciones: [
+        { valor: 'neto', texto: 'Por tiempo' },
+        { valor: 'llegada', texto: 'Por llegada' }
+      ],
+      valor: orden,
+      alCambiar: v => { orden = v; pintarLista(); pintarControles(); }
+    });
 
-    if (sinSalida.length && oleadas.length > 1) {
-      caja.hidden = false;
-      caja.textContent = 'Sin hora de salida en: ' + sinSalida.map(o => o.nombre).join(', ') +
-        '. Para esas oleadas el tiempo se mide desde la primera marca de la tanda, ' +
-        'así que no es comparable. Márcalas en Carrera → Salidas (puedes corregir la hora a mano).';
-    } else if (sinSalida.length) {
-      caja.hidden = false;
-      caja.textContent = 'Esta tanda no tiene hora de salida registrada: el tiempo se mide ' +
-        'desde la primera marca. Puedes fijarla en Carrera → Salidas → Corregir.';
-    } else {
-      caja.hidden = true;
+    const explicacion = UI.el('p', {
+      clase: 'campo__ayuda',
+      style: 'margin-top:8px',
+      texto: orden === 'neto'
+        ? 'Cuenta desde la salida de cada grupo. Es el orden justo cuando no todos salen a la vez.'
+        : 'El orden en que cruzaron la meta, tal como lo vio el juez.'
+    });
+
+    const nActivos = filtrosActivos();
+    const btnFiltros = UI.boton({
+      texto: nActivos ? 'Filtros (' + nActivos + ')' : 'Filtrar',
+      icono: 'filtro',
+      ancho: 'completo',
+      alPulsar: abrirFiltros
+    });
+    if (nActivos) btnFiltros.classList.add('esta-activo');
+
+    const cuerpo = UI.el('div', {}, [seg, explicacion]);
+    if (Estado.categorias().length || salidas.length > 1) {
+      cuerpo.append(UI.el('div', { style: 'height:12px' }), btnFiltros);
     }
-  }
+    cajaControles.append(UI.tarjeta({ cuerpo }));
 
-  function pintarTabla() {
-    const caja = $('#tabla-posiciones');
-    const total = Estado.vueltas();
-    const filas = Estado.posiciones(categoria, oleadaId, modo);
-    const oleadas = Estado.oleadas();
-    const variasOleadas = oleadas.length > 1;
-    caja.innerHTML = '';
-
-    if (!filas.length) {
-      caja.append(Util.el('div', { clase: 'item-vacio', texto: 'No hay corredores con ese filtro.' }));
-      return;
-    }
-
-    const tabla = Util.el('table');
-    const cabecera = [
-      Util.el('th', { clase: 'num', texto: '#' }),
-      Util.el('th', { clase: 'num', texto: 'Dorsal' }),
-      Util.el('th', { texto: 'Nombre' }),
-      Util.el('th', { texto: 'Categoría' })
-    ];
-    if (variasOleadas) cabecera.push(Util.el('th', { texto: 'Oleada' }));
-    cabecera.push(
-      Util.el('th', { clase: 'num', texto: 'Vueltas' }),
-      Util.el('th', { texto: 'Última' }),
-      Util.el('th', { texto: modo === 'neto' ? 'Tiempo neto' : 'Tiempo' }),
-      Util.el('th', { texto: 'Estado' })
-    );
-    tabla.append(Util.el('tr', {}, cabecera));
-
-    const cuerpo = document.createDocumentFragment();
-    for (const f of filas) {
-      const celdas = [
-        Util.el('td', { clase: 'num pos', texto: String(f.posicion) }),
-        Util.el('td', { clase: 'num', texto: String(f.dorsal) }),
-        Util.el('td', { texto: f.nombre || '—' }),
-        Util.el('td', { texto: f.categoria || '—' })
-      ];
-      if (variasOleadas) celdas.push(Util.el('td', { texto: f.nombreOleada || '—' }));
-      celdas.push(
-        Util.el('td', { clase: 'num', texto: f.vueltas + ' / ' + total }),
-        Util.el('td', { texto: f.ultima ? Util.hora(f.ultima) : '—' }),
-        Util.el('td', {
-          texto: f.tiempo != null
-            ? Util.duracion(f.tiempo) + (f.salidaEstimada ? ' *' : '')
-            : '—'
-        }),
-        Util.el('td', { texto: f.terminado ? 'Terminado' : 'En carrera' })
-      );
-      cuerpo.append(Util.el('tr', { clase: f.terminado ? 'terminado' : '' }, celdas));
-    }
-    tabla.append(cuerpo);
-    caja.append(tabla);
-
-    if (filas.some(f => f.salidaEstimada)) {
-      const t0 = Estado.inicioReferencia();
-      caja.append(Util.el('p', {
-        clase: 'nota',
-        texto: '* Sin hora de salida propia: el tiempo se mide desde la primera marca de la tanda' +
-               (t0 != null ? ' (' + Util.hora(t0) + ')' : '') + '.'
+    const sinSalida = salidas.filter(o => !o.horaSalida);
+    if (est.totalEventos && sinSalida.length && orden === 'neto') {
+      cajaControles.append(UI.nota({
+        tono: 'ojo',
+        texto: salidas.length > 1
+          ? 'Sin hora de salida en: ' + sinSalida.map(o => o.nombre).join(', ') +
+            '. El tiempo de esos corredores se mide desde la primera vuelta de alguien, ' +
+            'así que todavía no es comparable. Márcala en Carrera → Salidas.'
+          : 'Este grupo no tiene hora de salida, así que el tiempo se mide desde la primera ' +
+            'vuelta registrada. Puedes ponerla en Carrera → Salidas.'
       }));
     }
   }
 
-  function paqueteActual() {
-    return Exportar.paquete($('#sel-exportar').value, {
-      alcance: $('#sel-alcance').value,
-      categoria, oleada: oleadaId, modo
+  async function abrirFiltros() {
+    const cats = Estado.categorias();
+    const salidas = Estado.oleadas();
+
+    const selCat = UI.selector({
+      etiqueta: 'Categoría',
+      opciones: [{ valor: '', texto: 'Todas las categorías' }]
+        .concat(cats.map(c => ({ valor: c, texto: c }))),
+      valor: categoria
     });
+    const selSalida = salidas.length > 1 ? UI.selector({
+      etiqueta: 'Salida',
+      opciones: [{ valor: 0, texto: 'Todas las salidas' }]
+        .concat(salidas.map(o => ({ valor: o.id, texto: o.nombre }))),
+      valor: oleadaId
+    }) : null;
+
+    const cuerpo = UI.el('div', {}, [cats.length ? selCat : null, selSalida]);
+
+    const r = await UI.hoja({
+      titulo: 'Filtrar resultados',
+      cuerpo,
+      acciones: [
+        { texto: 'Aplicar', tipo: 'principal', valor: 'ok' },
+        { texto: 'Quitar filtros', valor: 'limpiar' }
+      ]
+    });
+    if (!r) return;
+    if (r === 'limpiar') { categoria = ''; oleadaId = 0; }
+    else {
+      categoria = cats.length ? selCat.obtenerValor() : '';
+      oleadaId = selSalida ? Number(selSalida.obtenerValor()) || 0 : 0;
+    }
+    pintarControles();
+    pintarLista();
   }
 
+  /* ================= lista ================= */
+
+  function pintarLista() {
+    cajaLista.innerHTML = '';
+    const total = Estado.vueltas();
+    const filas = Estado.posiciones(categoria, oleadaId, orden);
+    const salidas = Estado.oleadas();
+
+    if (!est.corredores.size) {
+      cajaLista.append(UI.tarjeta({
+        cuerpo: UI.vacio({
+          icono: 'grupo',
+          titulo: 'Todavía no hay corredores',
+          mensaje: 'Inscríbelos para ver los resultados aquí.'
+        })
+      }));
+      return;
+    }
+    if (!filas.length) {
+      cajaLista.append(UI.tarjeta({
+        cuerpo: UI.vacio({ icono: 'filtro', titulo: 'Ningún corredor con ese filtro' })
+      }));
+      return;
+    }
+
+    const lista = UI.el('div', { clase: 'lista' });
+    for (const f of filas) {
+      const meta = ['Dorsal ' + f.dorsal];
+      if (f.categoria) meta.push(f.categoria);
+      if (salidas.length > 1 && f.nombreOleada) meta.push(f.nombreOleada);
+
+      const pct = total ? Math.min(100, Math.round(f.vueltas / total * 100)) : 0;
+
+      lista.append(UI.el('button', {
+        type: 'button',
+        clase: 'puesto' +
+               (f.terminado ? ' puesto--termino' : '') +
+               (f.posicion <= 3 && f.vueltas > 0 ? ' puesto--podio' : ''),
+        onclick: () => abrirDetalle(f)
+      }, [
+        UI.el('span', { clase: 'puesto__numero', texto: f.vueltas ? String(f.posicion) : '—' }),
+        UI.el('span', { clase: 'puesto__cuerpo' }, [
+          UI.el('span', { clase: 'puesto__nombre', texto: f.nombre || 'Dorsal ' + f.dorsal }),
+          UI.el('span', { clase: 'puesto__meta', texto: meta.join(' · ') }),
+          UI.el('span', { clase: 'progreso' }, [
+            UI.el('span', { clase: 'progreso__relleno', style: 'width:' + pct + '%' })
+          ])
+        ]),
+        UI.el('span', { clase: 'puesto__derecha' }, [
+          UI.el('span', {
+            clase: 'puesto__tiempo',
+            texto: f.tiempo != null ? Util.duracion(f.tiempo) + (f.salidaEstimada ? '*' : '') : '—'
+          }),
+          UI.el('span', { clase: 'puesto__vueltas', texto: f.vueltas + ' de ' + total })
+        ])
+      ]));
+    }
+    cajaLista.append(lista);
+
+    if (filas.some(f => f.salidaEstimada && f.tiempo != null)) {
+      cajaLista.append(UI.nota({
+        tono: 'info',
+        texto: '* El tiempo de estos corredores no arranca en una hora de salida real, ' +
+               'sino en la primera vuelta registrada del grupo.'
+      }));
+    }
+
+    cajaLista.append(UI.el('div', { style: 'height:12px' }));
+    cajaLista.append(UI.boton({
+      texto: 'Compartir resultados', icono: 'compartir', tipo: 'principal',
+      ancho: 'completo', alPulsar: abrirExportar
+    }));
+  }
+
+  function abrirDetalle(f) {
+    const eventos = Estado.eventosDe(f.dorsal);
+    const total = Estado.vueltas();
+    const salida = f.salida;
+
+    const cuerpo = UI.el('div');
+    cuerpo.append(UI.el('div', { clase: 'cifras' }, [
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: f.vueltas ? String(f.posicion) : '—' }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Puesto' })
+      ]),
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: f.vueltas + '/' + total }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Vueltas' })
+      ]),
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: f.tiempo != null ? Util.duracion(f.tiempo) : '—' }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Tiempo' })
+      ])
+    ]));
+
+    if (salida != null) {
+      cuerpo.append(UI.el('p', {
+        clase: 'campo__ayuda', style: 'margin-bottom:12px',
+        texto: (f.salidaEstimada ? 'Sin hora de salida real. Se cuenta desde ' : 'Salió a las ') +
+               Util.hora(salida) + '.'
+      }));
+    }
+
+    if (eventos.length) {
+      cuerpo.append(UI.el('h3', { style: 'font-size:15px;margin-bottom:8px', texto: 'Vueltas' }));
+      const lista = UI.el('div', { clase: 'lista' });
+      eventos.forEach((ev, i) => {
+        const desde = i === 0 ? salida : eventos[i - 1].ts;
+        lista.append(UI.el('div', { clase: 'fila' }, [
+          UI.el('span', { clase: 'fila__dorsal', texto: String(i + 1) }),
+          UI.el('div', { clase: 'fila__cuerpo' }, [
+            UI.el('div', { clase: 'fila__titulo', texto: Util.hora(ev.ts) }),
+            UI.el('div', {
+              clase: 'fila__meta',
+              texto: (desde != null ? 'Vuelta en ' + Util.duracion(ev.ts - desde) : '') +
+                     (ev.dispositivo ? ' · ' + ev.dispositivo : '')
+            })
+          ])
+        ]));
+      });
+      cuerpo.append(lista);
+    } else {
+      cuerpo.append(UI.vacio({ icono: 'reloj', titulo: 'Todavía no ha pasado por la meta' }));
+    }
+
+    UI.hoja({ titulo: f.nombre || 'Dorsal ' + f.dorsal, descripcion: 'Dorsal ' + f.dorsal, cuerpo });
+  }
+
+  /* ================= exportar ================= */
+
+  async function abrirExportar() {
+    const selQue = UI.selector({
+      etiqueta: 'Qué compartir',
+      opciones: [
+        { valor: 'pos-csv', texto: 'Resultados', ayuda: 'La tabla de posiciones, para abrir en Excel.' },
+        { valor: 'ev-csv', texto: 'Todas las vueltas', ayuda: 'Una fila por vuelta, con su hora.' },
+        { valor: 'padron-csv', texto: 'Lista de corredores', ayuda: 'Dorsales, nombres y manillas.' },
+        { valor: 'json', texto: 'Copia de seguridad', ayuda: 'Para juntar con los otros celulares al final.' }
+      ],
+      valor: 'pos-csv'
+    });
+    const selAlcance = UI.selector({
+      etiqueta: 'De qué grupos',
+      opciones: [
+        { valor: 'activa', texto: 'Solo «' + est.tandaActiva.nombre + '»' },
+        { valor: 'todas', texto: 'Todos los grupos del día' }
+      ],
+      valor: 'activa'
+    });
+
+    const cuerpo = UI.el('div', {}, [
+      selQue, selAlcance,
+      UI.nota({
+        tono: 'info', icono: 'candado',
+        texto: 'Los datos solo salen de este celular cuando tú los compartes. ' +
+               'Contienen nombres de menores de edad.'
+      })
+    ]);
+
+    const r = await UI.hoja({
+      titulo: 'Compartir resultados',
+      cuerpo,
+      acciones: [
+        { texto: 'Compartir', icono: 'compartir', tipo: 'principal', valor: 'compartir' },
+        { texto: 'Guardar archivo', icono: 'descargar', valor: 'descargar' },
+        { texto: 'Copiar al portapapeles', icono: 'copiar', valor: 'copiar' }
+      ]
+    });
+    if (!r) return;
+
+    const p = Exportar.paquete(selQue.obtenerValor(), {
+      alcance: selAlcance.obtenerValor(),
+      categoria, oleada: oleadaId, modo: orden
+    });
+    if (r === 'descargar') Util.descargar(p.nombre, p.contenido, p.mime);
+    else if (r === 'compartir') Util.compartir(p.nombre, p.contenido, p.mime);
+    else Util.copiar(p.contenido);
+  }
+
+  /* ================= ciclo de vida ================= */
+
   function iniciar() {
-    $('#filtro-categoria').addEventListener('change', e => { categoria = e.target.value; pintarTabla(); });
-    $('#filtro-oleada').addEventListener('change', e => { oleadaId = Number(e.target.value) || 0; pintarTabla(); });
-    $('#sel-orden').addEventListener('change', e => { modo = e.target.value; pintarTabla(); });
-    $('#btn-refrescar-pos').addEventListener('click', () => { refrescar(); Util.aviso('Tabla actualizada', 'ok'); });
-
-    $('#btn-exp-descargar').addEventListener('click', () => {
-      const p = paqueteActual();
-      Util.descargar(p.nombre, p.contenido, p.mime);
-    });
-    $('#btn-exp-compartir').addEventListener('click', () => {
-      const p = paqueteActual();
-      Util.compartir(p.nombre, p.contenido, p.mime);
-    });
-    $('#btn-exp-copiar').addEventListener('click', () => {
-      const p = paqueteActual();
-      Util.copiar(p.contenido);
-    });
-
+    cajaCifras = $('#posiciones-cifras');
+    cajaControles = $('#posiciones-controles');
+    cajaLista = $('#posiciones-lista');
     refrescar();
   }
 
   function refrescar() {
-    pintarContadores();
-    pintarFiltros();
-    pintarAviso();
-    pintarTabla();
+    if (!cajaCifras) return;
+    if (!Estado.categorias().includes(categoria)) categoria = '';
+    if (!Estado.oleadas().some(o => o.id === oleadaId)) oleadaId = 0;
+    pintarCifras();
+    pintarControles();
+    pintarLista();
   }
 
   return { iniciar, refrescar };

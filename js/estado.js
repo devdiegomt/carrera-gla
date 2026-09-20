@@ -102,7 +102,7 @@ const Estado = (() => {
 
     // Siempre debe existir una tanda activa.
     if (!est.tandas.size) {
-      const t = await crearTanda({ nombre: 'Tanda 1' }, false);
+      const t = await crearTanda({ nombre: 'Grupo 1' }, false);
       est.config.tandaActiva = t.id;
     } else if (!est.tandas.has(est.config.tandaActiva)) {
       est.config.tandaActiva = tandaMasReciente().id;
@@ -124,8 +124,8 @@ const Estado = (() => {
       const tanda = normalizarTanda({
         id,
         nombre: id === 'T-1'
-          ? (est.config.nombreCarrera || 'Tanda 1')
-          : 'Tanda recuperada ' + id,
+          ? (est.config.nombreCarrera || 'Grupo 1')
+          : 'Grupo recuperado ' + id,
         vueltas: Number(est.config.vueltasPorDefecto) || 5,
         ventanaMinSeg: Number(est.config.ventanaPorDefecto) || 60,
         creadaEn: Date.now() + (creadas++)
@@ -151,7 +151,7 @@ const Estado = (() => {
       oleadas: []
     }, t);
     if (!Array.isArray(tanda.oleadas) || !tanda.oleadas.length) {
-      tanda.oleadas = [{ id: 1, nombre: 'Oleada 1', horaSalida: null }];
+      tanda.oleadas = [{ id: 1, nombre: 'Salida 1', horaSalida: null }];
     }
     return tanda;
   }
@@ -246,7 +246,7 @@ const Estado = (() => {
   async function crearTanda(datos, activar = true) {
     const tanda = normalizarTanda({
       id: nuevoIdTanda(),
-      nombre: (datos.nombre || '').trim() || 'Tanda ' + (est.tandas.size + 1),
+      nombre: (datos.nombre || '').trim() || 'Grupo ' + (est.tandas.size + 1),
       vueltas: Number(datos.vueltas) || Number(est.config.vueltasPorDefecto) || 5,
       ventanaMinSeg: Number(datos.ventanaMinSeg) || Number(est.config.ventanaPorDefecto) || 60,
       estado: 'abierta',
@@ -332,7 +332,7 @@ const Estado = (() => {
     reconstruirCorredores(Array.from(est.todos.values()));
 
     if (!est.tandas.size) {
-      const t = await crearTanda({ nombre: 'Tanda 1' }, false);
+      const t = await crearTanda({ nombre: 'Grupo 1' }, false);
       await activarTanda(t.id);
     } else if (est.config.tandaActiva === idTanda) {
       await activarTanda(tandaMasReciente().id);
@@ -359,7 +359,7 @@ const Estado = (() => {
   async function agregarOleada(nombre) {
     const lista = oleadas().slice();
     const id = lista.reduce((m, o) => Math.max(m, o.id), 0) + 1;
-    lista.push({ id, nombre: (nombre || '').trim() || 'Oleada ' + id, horaSalida: null });
+    lista.push({ id, nombre: (nombre || '').trim() || 'Salida ' + id, horaSalida: null });
     await guardarTanda({ oleadas: lista });
     return id;
   }
@@ -851,7 +851,7 @@ const Estado = (() => {
     est.totalEventos = 0;
     est.ultimoLocal = null;
     est.tandaActiva = null;
-    const t = await crearTanda({ nombre: 'Tanda 1' }, false);
+    const t = await crearTanda({ nombre: 'Grupo 1' }, false);
     await activarTanda(t.id);
   }
 

@@ -1,7 +1,10 @@
 /* ============================================================
-   tandas.js — selector de tanda activa, gestión de tandas y de
-   sus oleadas. Aquí vive la reutilización de manillas: una tanda
-   nueva puede heredar las parejas dorsal↔manilla de otra.
+   tandas.js — grupos y salidas.
+
+   En la interfaz una "tanda" se llama GRUPO (los que corren
+   juntos) y una "oleada" se llama SALIDA (los que arrancan al
+   mismo tiempo dentro del grupo). En el código se conservan los
+   nombres originales del modelo de datos.
    ============================================================ */
 'use strict';
 
@@ -10,328 +13,319 @@ const Tandas = (() => {
   const $ = Util.$;
   const est = Estado.est;
 
-  function lista() {
-    return Array.from(est.tandas.values()).sort((a, b) => b.creadaEn - a.creadaEn);
-  }
+  const lista = () => Array.from(est.tandas.values()).sort((a, b) => b.creadaEn - a.creadaEn);
 
-  /* ---------------- barra superior ---------------- */
+  /* ================= barra superior ================= */
 
   function pintarBarra() {
-    const sel = $('#sel-tanda');
-    sel.innerHTML = '';
-    for (const t of lista()) {
-      sel.append(Util.el('option', {
-        value: t.id,
-        texto: t.nombre + (t.estado === 'cerrada' ? ' (cerrada)' : '')
-      }));
-    }
-    sel.value = est.tandaActiva ? est.tandaActiva.id : '';
-
+    if (!est.tandaActiva) return;
+    $('#barra-grupo-nombre').textContent = est.tandaActiva.nombre;
     const r = Estado.resumen();
-    $('#barra-tanda-info').textContent =
-      r.inscritos + ' insc. · ' + Estado.vueltas() + ' v.';
+    $('#barra-grupo-dato').textContent =
+      r.inscritos + (r.inscritos === 1 ? ' corredor' : ' corredores');
   }
 
-  async function cambiarTanda(id) {
+  async function abrirSelector() {
+    const caja = UI.el('div', { clase: 'lista' });
+    for (const t of lista()) {
+      const r = Estado.resumenTanda(t.id);
+      const activo = est.tandaActiva && t.id === est.tandaActiva.id;
+      caja.append(UI.el('button', {
+        type: 'button',
+        clase: 'fila' + (activo ? ' fila--activa' : ''),
+        onclick: () => UI.cerrarHoja({ accion: 'usar', id: t.id })
+      }, [
+        UI.el('div', { clase: 'fila__cuerpo' }, [
+          UI.el('div', { clase: 'fila__titulo', texto: t.nombre }),
+          UI.el('div', {
+            clase: 'fila__meta',
+            texto: r.inscritos + ' corredores · ' + t.vueltas +
+                   (t.vueltas === 1 ? ' vuelta' : ' vueltas') + ' · ' +
+                   (r.eventos === 1 ? '1 pasada' : r.eventos + ' pasadas')
+          })
+        ]),
+        activo ? UI.icono('cheque') : UI.icono('derecha')
+      ]));
+    }
+
+    const r = await UI.hoja({
+      titulo: 'Grupos',
+      descripcion: 'Cada grupo corre aparte. Los dorsales y las manillas se pueden repetir ' +
+                   'entre grupos sin que los datos se mezclen.',
+      cuerpo: caja,
+      acciones: [{ texto: 'Crear un grupo nuevo', icono: 'mas', tipo: 'principal', valor: { accion: 'crear' } }]
+    });
+    if (!r) return;
+    if (r.accion === 'crear') return crear();
+    if (r.accion === 'usar') return cambiar(r.id);
+  }
+
+  async function cambiar(id) {
     if (!id || (est.tandaActiva && id === est.tandaActiva.id)) return;
     if (NFC.estaActivo()) {
-      const ok = await Util.confirmar(
-        'Cambiar de tanda con la lectura activa',
-        'Se detendrá la lectura NFC para evitar que una vuelta se registre en la tanda equivocada.',
-        'Cambiar igual', false);
-      if (!ok) { pintarBarra(); return; }
+      const ok = await UI.confirmar({
+        titulo: 'Hay una lectura activa',
+        mensaje: 'Se apagará la lectura para que ninguna vuelta quede en el grupo equivocado.',
+        confirmar: 'Cambiar de grupo', peligro: false
+      });
+      if (!ok) return;
       NFC.detener();
     }
     await Estado.activarTanda(id);
-    Util.aviso('Tanda activa: ' + est.tandaActiva.nombre, 'ok');
+    UI.aviso('Grupo activo: ' + est.tandaActiva.nombre, 'ok');
     App.tandaCambio();
   }
 
-  /* ---------------- lista de tandas ---------------- */
+  /* ================= crear y editar ================= */
 
-  function pintarListaTandas() {
-    const caja = $('#lista-tandas');
-    caja.innerHTML = '';
-    for (const t of lista()) {
-      const r = Estado.resumenTanda(t.id);
-      const activa = est.tandaActiva && t.id === est.tandaActiva.id;
-
-      const cuerpo = Util.el('div', { clase: 'item-cuerpo' }, [
-        Util.el('strong', { texto: t.nombre }),
-        Util.el('span', {
-          clase: 'item-meta',
-          texto: r.inscritos + ' inscritos · ' + r.conChip + ' con manilla · ' +
-                 r.eventos + (r.eventos === 1 ? ' vuelta' : ' vueltas') + ' de ' +
-                 t.vueltas + ' · ' + (t.oleadas || []).length +
-                 ((t.oleadas || []).length === 1 ? ' oleada' : ' oleadas')
-        }),
-        Util.el('span', { clase: 'item-codigo', texto: t.id })
-      ]);
-
-      const acciones = Util.el('div', { clase: 'item-acciones' }, [
-        Util.el('button', {
-          type: 'button', texto: '✏️', 'aria-label': 'Renombrar tanda',
-          onclick: () => renombrar(t)
-        }),
-        Util.el('button', {
-          type: 'button', texto: '🗑️', 'aria-label': 'Eliminar tanda',
-          onclick: () => eliminar(t)
-        })
-      ]);
-
-      const fila = Util.el('div', { clase: 'item' + (activa ? ' activa-tanda' : '') }, [cuerpo]);
-      if (activa) fila.prepend(Util.el('span', { clase: 'item-etiqueta', texto: 'Activa' }));
-      else fila.append(Util.el('button', {
-        clase: 'btn btn-secundario', type: 'button', texto: 'Usar',
-        onclick: () => cambiarTanda(t.id)
-      }));
-      fila.append(acciones);
-      caja.append(fila);
-    }
-  }
-
-  /* ---------------- crear tanda ---------------- */
-
-  async function nueva() {
+  async function crear() {
     const anteriores = lista();
 
-    const inNombre = Util.el('input', {
-      type: 'text', maxlength: '40', value: 'Tanda ' + (est.tandas.size + 1)
+    const cNombre = UI.campo({ etiqueta: 'Nombre del grupo', valor: 'Grupo ' + (est.tandas.size + 1), maximo: 40 });
+    const cVueltas = UI.contador({
+      etiqueta: 'Vueltas para terminar',
+      valor: est.config.vueltasPorDefecto || 5, minimo: 1, maximo: 99
     });
-    const inVueltas = Util.el('input', {
-      type: 'number', min: '1', max: '99', step: '1',
-      value: String(est.config.vueltasPorDefecto || 5)
+    const cSalidas = UI.contador({
+      etiqueta: 'Cuántas salidas',
+      ayuda: 'Una sola si arrancan todos juntos. Dos o más si arrancan escalonados.',
+      valor: 1, minimo: 1, maximo: 20
     });
-    const inVentana = Util.el('input', {
-      type: 'number', min: '1', max: '3600', step: '1',
-      value: String(est.config.ventanaPorDefecto || 60)
+
+    let heredarDe = anteriores.length ? anteriores[0].id : '';
+    const selHeredar = anteriores.length ? UI.selector({
+      etiqueta: 'Reutilizar las manillas de',
+      ayuda: 'Si cada manilla va pegada a su número de dorsal, con esto no hay que volver a ' +
+             'escanear: el grupo nuevo nace con las manillas puestas y solo faltan los nombres.',
+      opciones: [{ valor: '', texto: 'No reutilizar: empezar de cero' }].concat(
+        anteriores.map(t => {
+          const r = Estado.resumenTanda(t.id);
+          return { valor: t.id, texto: t.nombre, ayuda: r.conChip + ' manillas asignadas' };
+        })),
+      valor: heredarDe,
+      alCambiar: v => { heredarDe = v; }
+    }) : null;
+
+    const cuerpo = UI.el('div', {}, [cNombre, cVueltas, cSalidas, selHeredar]);
+
+    const r = await UI.hoja({
+      titulo: 'Nuevo grupo',
+      cuerpo,
+      acciones: [{ texto: 'Crear grupo', tipo: 'principal', valor: 'ok' }]
     });
-    const inOleadas = Util.el('input', { type: 'number', min: '1', max: '20', step: '1', value: '1' });
+    if (r !== 'ok') return;
 
-    const selHeredar = Util.el('select', {});
-    selHeredar.append(Util.el('option', { value: '', texto: 'No heredar: inscribir desde cero' }));
-    for (const t of anteriores) {
-      const r = Estado.resumenTanda(t.id);
-      selHeredar.append(Util.el('option', {
-        value: t.id,
-        texto: t.nombre + ' (' + r.conChip + ' manillas vinculadas)'
-      }));
-    }
-    if (anteriores.length) selHeredar.value = anteriores[0].id;
-
-    const chkNombres = Util.el('input', { type: 'checkbox' });
-    const etqNombres = Util.el('label', { clase: 'campo-check' }, [
-      chkNombres, document.createTextNode(' Copiar también los nombres (misma gente corriendo otra vez)')
-    ]);
-
-    const cuerpo = Util.el('div', {}, [
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Nombre de la tanda' }), inNombre]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Vueltas para terminar' }), inVueltas]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Ventana mínima entre vueltas (s)' }), inVentana]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Cuántas oleadas (salidas escalonadas)' }), inOleadas]),
-      Util.el('hr'),
-      Util.el('div', { clase: 'campo' }, [
-        Util.el('label', { texto: 'Reutilizar manillas de' }), selHeredar,
-        Util.el('p', {
-          clase: 'nota',
-          texto: 'Copia las parejas dorsal↔manilla de esa tanda. Si cada manilla va pegada ' +
-                 'a su número de dorsal, con esto no hay que volver a escanear nada: solo ' +
-                 'escribir los nombres nuevos.'
-        })
-      ]),
-      etqNombres
-    ]);
-
-    const r = await Util.modal('Nueva tanda', cuerpo, [
-      { texto: 'Crear tanda', clase: 'btn-primario', valor: 'crear' },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
-    ]);
-    if (r !== 'crear') return;
-
-    const nOleadas = Math.max(1, Math.min(20, Number(inOleadas.value) || 1));
+    const n = cSalidas.obtenerValor();
     const oleadas = [];
-    for (let i = 1; i <= nOleadas; i++) {
-      oleadas.push({ id: i, nombre: 'Oleada ' + i, horaSalida: null });
-    }
+    for (let i = 1; i <= n; i++) oleadas.push({ id: i, nombre: 'Salida ' + i, horaSalida: null });
 
     const tanda = await Estado.crearTanda({
-      nombre: inNombre.value,
-      vueltas: Number(inVueltas.value),
-      ventanaMinSeg: Number(inVentana.value),
+      nombre: cNombre.obtenerValor(),
+      vueltas: cVueltas.obtenerValor(),
+      ventanaMinSeg: est.config.ventanaPorDefecto || 60,
       oleadas,
-      heredarChipsDe: selHeredar.value || null,
-      heredarNombres: chkNombres.checked
+      heredarChipsDe: (selHeredar && heredarDe) || null
     });
 
-    const heredados = selHeredar.value ? Estado.resumenTanda(tanda.id) : null;
-    Util.aviso('Tanda «' + tanda.nombre + '» creada' +
-      (heredados && heredados.inscritos ? ' con ' + heredados.conChip + ' manillas heredadas' : ''), 'ok');
+    const res = Estado.resumenTanda(tanda.id);
+    UI.aviso('Grupo «' + tanda.nombre + '» creado' +
+      (res.conChip ? ' con ' + res.conChip + ' manillas reutilizadas' : ''), 'ok');
     App.tandaCambio();
   }
 
-  async function renombrar(t) {
-    const inNombre = Util.el('input', { type: 'text', maxlength: '40', value: t.nombre });
-    const cuerpo = Util.el('div', {}, [
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Nombre' }), inNombre]),
-      Util.el('p', { clase: 'nota', texto: 'Código interno: ' + t.id + ' (no cambia; es lo que usan la unión y el padrón).' })
-    ]);
-    const r = await Util.modal('Renombrar tanda', cuerpo, [
-      { texto: 'Guardar', clase: 'btn-primario', valor: 'ok' },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
-    ]);
-    if (r !== 'ok') return;
-    await Estado.guardarTandaPorId(t.id, { nombre: inNombre.value.trim() || t.nombre });
-    Util.aviso('Tanda renombrada', 'ok');
+  async function editar(t) {
+    const cNombre = UI.campo({ etiqueta: 'Nombre del grupo', valor: t.nombre, maximo: 40 });
+    const r = await UI.hoja({
+      titulo: 'Grupo «' + t.nombre + '»',
+      cuerpo: UI.el('div', {}, [
+        cNombre,
+        UI.el('p', { clase: 'codigo', texto: 'Código para juntar datos: ' + t.id })
+      ]),
+      acciones: [
+        { texto: 'Guardar', tipo: 'principal', valor: 'ok' },
+        { texto: 'Eliminar el grupo', tipo: 'peligro', valor: 'borrar' }
+      ]
+    });
+    if (!r) return;
+    if (r === 'borrar') return eliminar(t);
+    await Estado.guardarTandaPorId(t.id, { nombre: cNombre.obtenerValor().trim() || t.nombre });
+    UI.aviso('Grupo renombrado', 'ok');
     App.tandaCambio();
   }
 
   async function eliminar(t) {
     const r = Estado.resumenTanda(t.id);
-    const ok = await Util.confirmar(
-      'Eliminar la tanda «' + t.nombre + '»',
-      'Se borrarán sus ' + r.inscritos + ' corredores y sus ' + r.eventos + ' vueltas.\n' +
-      'Las demás tandas no se tocan. Esta acción no se puede deshacer: exporta antes si la necesitas.',
-      'Sí, eliminar la tanda');
+    const ok = await UI.confirmar({
+      titulo: 'Eliminar «' + t.nombre + '»',
+      mensaje: 'Se borran sus ' + r.inscritos + ' corredores y sus ' + r.eventos + ' pasadas.\n' +
+               'Los otros grupos no se tocan. No se puede deshacer: comparte una copia antes si la necesitas.',
+      confirmar: 'Sí, eliminar'
+    });
     if (!ok) return;
     await Estado.borrarTanda(t.id);
-    Util.aviso('Tanda eliminada', 'ok');
+    UI.aviso('Grupo eliminado', 'neutro');
     App.tandaCambio();
   }
 
-  /* ---------------- oleadas ---------------- */
+  /* ================= pantalla de grupos (dentro de Ajustes) ================= */
 
-  function pintarOleadas() {
-    $('#nombre-tanda-oleadas').textContent = est.tandaActiva ? est.tandaActiva.nombre : '';
-    const caja = $('#lista-oleadas');
-    caja.innerHTML = '';
+  function panelGrupos() {
+    const caja = UI.el('div', { clase: 'lista' });
+    for (const t of lista()) {
+      const r = Estado.resumenTanda(t.id);
+      const activo = est.tandaActiva && t.id === est.tandaActiva.id;
+      const fila = UI.el('div', { clase: 'fila' + (activo ? ' fila--activa' : '') }, [
+        UI.el('div', { clase: 'fila__cuerpo' }, [
+          UI.el('div', { clase: 'fila__titulo', texto: t.nombre + (activo ? ' · en uso' : '') }),
+          UI.el('div', {
+            clase: 'fila__meta',
+            texto: r.inscritos + ' corredores · ' + r.conChip + ' con manilla · ' +
+                   t.vueltas + (t.vueltas === 1 ? ' vuelta' : ' vueltas')
+          })
+        ])
+      ]);
+      if (!activo) {
+        fila.append(UI.boton({ texto: 'Usar', tamano: 'chico', alPulsar: () => cambiar(t.id) }));
+      }
+      fila.append(UI.boton({ icono: 'lapiz', tipo: 'fantasma', etiqueta: 'Editar grupo', alPulsar: () => editar(t) }));
+      caja.append(fila);
+    }
 
-    const oleadas = Estado.oleadas();
-    for (const o of oleadas) {
+    return UI.el('div', {}, [
+      caja,
+      UI.el('div', { style: 'height:12px' }),
+      UI.boton({ texto: 'Crear un grupo nuevo', icono: 'mas', tipo: 'principal', ancho: 'completo', alPulsar: crear })
+    ]);
+  }
+
+  /* ================= salidas ================= */
+
+  function panelSalidas() {
+    const salidas = Estado.oleadas();
+    const caja = UI.el('div', { clase: 'lista' });
+
+    for (const o of salidas) {
       let cuantos = 0;
       for (const c of est.corredores.values()) if (c.oleada === o.id) cuantos++;
-
-      const acciones = Util.el('div', { clase: 'item-acciones' }, [
-        Util.el('button', {
-          type: 'button', texto: '✏️', 'aria-label': 'Renombrar oleada',
-          onclick: () => renombrarOleada(o)
-        })
-      ]);
-      if (oleadas.length > 1) {
-        acciones.append(Util.el('button', {
-          type: 'button', texto: '🗑️', 'aria-label': 'Eliminar oleada',
-          onclick: () => eliminarOleada(o)
-        }));
-      }
-
-      caja.append(Util.el('div', { clase: 'item' + (o.horaSalida ? ' ok' : '') }, [
-        Util.el('div', { clase: 'item-cuerpo' }, [
-          Util.el('strong', { texto: o.nombre }),
-          Util.el('span', {
-            clase: 'item-meta',
-            texto: cuantos + ' corredor' + (cuantos === 1 ? '' : 'es') + ' · ' +
-                   (o.horaSalida ? 'salida ' + Util.hora(o.horaSalida) : 'sin salida')
+      const fila = UI.el('div', { clase: 'fila' + (o.horaSalida ? ' fila--ok' : '') }, [
+        UI.el('div', { clase: 'fila__cuerpo' }, [
+          UI.el('div', { clase: 'fila__titulo', texto: o.nombre }),
+          UI.el('div', {
+            clase: 'fila__meta',
+            texto: cuantos + (cuantos === 1 ? ' corredor · ' : ' corredores · ') +
+                   (o.horaSalida ? 'salió a las ' + Util.hora(o.horaSalida) : 'sin salir')
           })
         ]),
-        acciones
-      ]));
+        UI.boton({ icono: 'lapiz', tipo: 'fantasma', etiqueta: 'Renombrar salida', alPulsar: () => renombrarSalida(o) })
+      ]);
+      if (salidas.length > 1) {
+        fila.append(UI.boton({
+          icono: 'basura', tipo: 'fantasma', etiqueta: 'Eliminar salida',
+          alPulsar: () => eliminarSalida(o)
+        }));
+      }
+      caja.append(fila);
     }
 
-    if (oleadas.length > 1) {
-      caja.append(Util.el('button', {
-        clase: 'btn btn-secundario', type: 'button',
-        texto: '↔️ Repartir inscritos entre oleadas',
-        onclick: repartir
-      }));
-    }
-  }
-
-  async function renombrarOleada(o) {
-    const inNombre = Util.el('input', { type: 'text', maxlength: '30', value: o.nombre });
-    const cuerpo = Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Nombre' }), inNombre]);
-    const r = await Util.modal('Renombrar oleada', cuerpo, [
-      { texto: 'Guardar', clase: 'btn-primario', valor: 'ok' },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
+    const acciones = UI.el('div', { clase: 'acciones', style: 'margin-top:12px' }, [
+      UI.boton({ texto: 'Añadir salida', icono: 'mas', alPulsar: nuevaSalida })
     ]);
-    if (r !== 'ok') return;
-    await Estado.actualizarOleada(o.id, { nombre: inNombre.value.trim() || o.nombre });
-    App.datosCambiaron();
-    pintarOleadas();
+    if (salidas.length > 1) {
+      acciones.append(UI.boton({ texto: 'Repartir corredores', icono: 'grupo', alPulsar: repartir }));
+    }
+
+    return UI.el('div', {}, [
+      UI.el('p', {
+        clase: 'campo__ayuda', style: 'margin-bottom:12px',
+        texto: 'Si el grupo arranca escalonado, crea una salida por cada arranque y dile a la app ' +
+               'quién va en cada una. La hora se marca en la pestaña Carrera.'
+      }),
+      caja, acciones
+    ]);
   }
 
-  async function nuevaOleada() {
+  async function nuevaSalida() {
     const id = await Estado.agregarOleada('');
-    Util.aviso('Oleada ' + id + ' añadida', 'ok');
+    UI.aviso('Salida ' + id + ' añadida', 'ok');
     App.datosCambiaron();
-    pintarOleadas();
+    Ajustes.refrescar();
   }
 
-  async function eliminarOleada(o) {
-    const ok = await Util.confirmar(
-      'Eliminar ' + o.nombre,
-      'Los corredores de esa oleada pasarán a la primera oleada que quede.',
-      'Sí, eliminar');
+  async function renombrarSalida(o) {
+    const nombre = await UI.pedir({
+      titulo: 'Renombrar salida', etiqueta: 'Nombre', valor: o.nombre
+    });
+    if (nombre == null) return;
+    await Estado.actualizarOleada(o.id, { nombre: nombre.trim() || o.nombre });
+    App.datosCambiaron();
+    Ajustes.refrescar();
+  }
+
+  async function eliminarSalida(o) {
+    const ok = await UI.confirmar({
+      titulo: 'Eliminar ' + o.nombre,
+      mensaje: 'Los corredores de esa salida pasan a la primera que quede.',
+      confirmar: 'Sí, eliminar'
+    });
     if (!ok) return;
     await Estado.borrarOleada(o.id);
     App.datosCambiaron();
-    pintarOleadas();
+    Ajustes.refrescar();
   }
 
-  /** Asigna oleadas por rango de dorsal, que es como se suele organizar. */
+  /** Reparte por rangos de dorsal, que es como se suele organizar. */
   async function repartir() {
-    const oleadas = Estado.oleadas();
+    const salidas = Estado.oleadas();
     const campos = [];
-    const cuerpo = Util.el('div', {}, [
-      Util.el('p', { texto: 'Indica desde qué dorsal empieza cada oleada. Los dorsales menores al primer corte quedan en la primera oleada.' })
+    const cuerpo = UI.el('div', {}, [
+      UI.el('p', {
+        clase: 'campo__ayuda', style: 'margin-bottom:12px',
+        texto: 'Indica desde qué dorsal empieza cada salida. Los números menores quedan en la primera.'
+      })
     ]);
-    for (let i = 1; i < oleadas.length; i++) {
-      const inp = Util.el('input', { type: 'number', min: '1', step: '1', placeholder: 'dorsal' });
-      campos.push({ oleada: oleadas[i], input: inp });
-      cuerpo.append(Util.el('div', { clase: 'campo' }, [
-        Util.el('label', { texto: oleadas[i].nombre + ' empieza en el dorsal' }), inp
-      ]));
+    for (let i = 1; i < salidas.length; i++) {
+      const c = UI.campo({
+        etiqueta: salidas[i].nombre + ' empieza en el dorsal',
+        tipo: 'number', marcador: 'Ej.: 150'
+      });
+      campos.push({ oleada: salidas[i].id, campo: c });
+      cuerpo.append(c);
     }
 
-    const r = await Util.modal('Repartir por rango de dorsal', cuerpo, [
-      { texto: 'Aplicar', clase: 'btn-primario', valor: 'ok' },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
-    ]);
+    const r = await UI.hoja({
+      titulo: 'Repartir corredores',
+      cuerpo,
+      acciones: [{ texto: 'Aplicar', tipo: 'principal', valor: 'ok' }]
+    });
     if (r !== 'ok') return;
 
     const cortes = campos
-      .map(c => ({ oleada: c.oleada.id, desde: Number(c.input.value) }))
+      .map(c => ({ oleada: c.oleada, desde: Number(c.campo.obtenerValor()) }))
       .filter(c => Number.isFinite(c.desde) && c.desde > 0)
       .sort((a, b) => a.desde - b.desde);
-    if (!cortes.length) { Util.aviso('No indicaste ningún corte', 'error'); return; }
+    if (!cortes.length) { UI.aviso('No indicaste ningún número', 'error'); return; }
 
     const cambios = [];
     for (const c of est.corredores.values()) {
-      let destino = oleadas[0].id;
+      let destino = salidas[0].id;
       for (const corte of cortes) if (c.dorsal >= corte.desde) destino = corte.oleada;
       if (c.oleada !== destino) cambios.push(Object.assign({}, c, { oleada: destino }));
     }
-    if (!cambios.length) { Util.aviso('No hubo cambios', ''); return; }
+    if (!cambios.length) { UI.aviso('No hubo cambios', 'neutro'); return; }
 
     await DB.ponerVarios('corredores', cambios);
     for (const c of cambios) { est.todos.set(c.id, c); est.corredores.set(c.dorsal, c); }
-    Util.aviso(cambios.length + ' corredores reasignados', 'ok');
+    UI.aviso(cambios.length + ' corredores reasignados', 'ok');
     App.datosCambiaron();
-    pintarOleadas();
+    Ajustes.refrescar();
   }
 
-  /* ---------------- ciclo de vida ---------------- */
+  /* ================= ciclo de vida ================= */
 
   function iniciar() {
-    $('#sel-tanda').addEventListener('change', e => cambiarTanda(e.target.value));
-    $('#btn-nueva-tanda').addEventListener('click', nueva);
-    $('#btn-nueva-oleada').addEventListener('click', nuevaOleada);
-    refrescar();
-  }
-
-  function refrescar() {
+    $('#barra-grupo').addEventListener('click', abrirSelector);
     pintarBarra();
-    pintarListaTandas();
-    pintarOleadas();
   }
 
-  return { iniciar, refrescar, pintarBarra, pintarOleadas, pintarListaTandas };
+  return { iniciar, pintarBarra, abrirSelector, crear, panelGrupos, panelSalidas };
 })();

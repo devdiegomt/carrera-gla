@@ -1,6 +1,8 @@
 /* ============================================================
-   ajustes.js — configuración, reloj, padrón, unión de
-   dispositivos, diagnóstico y zona de riesgo.
+   ajustes.js — todo lo que no se toca durante la carrera.
+
+   Se presenta como un menú corto: cada opción abre su propia
+   hoja. Así el profesor no ve nunca más de una cosa a la vez.
    ============================================================ */
 'use strict';
 
@@ -9,547 +11,494 @@ const Ajustes = (() => {
   const $ = Util.$;
   const est = Estado.est;
 
-  let archivosUnion = null;
-  let mapeoUnion = null;
-  let planUnion = null;
+  let caja;
+  let relojInterval = null;
 
-  let analisisPadron = null;
-  let mapeoPadron = null;
+  /* ================= helpers de menú ================= */
 
-  /* ---------------- configuración ---------------- */
+  function opcionMenu({ icono, titulo, detalle, alPulsar, tono }) {
+    return UI.el('button', {
+      type: 'button',
+      clase: 'fila' + (tono ? ' fila--' + tono : ''),
+      onclick: alPulsar
+    }, [
+      UI.icono(icono),
+      UI.el('div', { clase: 'fila__cuerpo' }, [
+        UI.el('div', { clase: 'fila__titulo', texto: titulo }),
+        detalle ? UI.el('div', { clase: 'fila__meta', texto: detalle }) : null
+      ]),
+      UI.icono('derecha')
+    ]);
+  }
 
-  function cargarFormulario() {
+  /* ================= grupo activo ================= */
+
+  function tarjetaGrupo() {
     const t = est.tandaActiva;
-    $('#cfg-tanda-nombre').value = t ? t.nombre : '';
-    $('#cfg-vueltas').value = t ? t.vueltas : 5;
-    $('#cfg-ventana').value = t ? t.ventanaMinSeg : 60;
-    $('#cfg-nombre').value = est.config.nombreCarrera || '';
-    $('#cfg-digitos').value = est.config.digitosDorsal;
-    $('#cfg-puesto').value = est.config.nombrePuesto || '';
-    $('#cfg-dispositivo').value = est.config.idDispositivo || '';
-    $('#cfg-rango-desde').value = est.config.rangoDesde || '';
-    $('#cfg-rango-hasta').value = est.config.rangoHasta || '';
+
+    const cNombre = UI.campo({ etiqueta: 'Nombre del grupo', valor: t.nombre, maximo: 40 });
+    const cVueltas = UI.contador({
+      etiqueta: 'Vueltas para terminar', valor: t.vueltas, minimo: 1, maximo: 99
+    });
+    const cVentana = UI.contador({
+      etiqueta: 'Tiempo mínimo entre vueltas',
+      ayuda: 'Si la misma manilla se lee otra vez antes de este tiempo, no cuenta. ' +
+             'Es lo que evita contar dos veces la misma vuelta. Ponlo un poco por debajo ' +
+             'de lo que tarda el corredor más rápido en dar una vuelta.',
+      valor: t.ventanaMinSeg, minimo: 5, maximo: 600, sufijo: 'segundos'
+    });
+
+    const guardar = UI.boton({
+      texto: 'Guardar', icono: 'cheque', tipo: 'principal', ancho: 'completo',
+      alPulsar: async () => {
+        const vueltas = cVueltas.obtenerValor();
+        if (vueltas !== t.vueltas) {
+          const ok = await UI.confirmar({
+            titulo: 'Cambiar las vueltas',
+            mensaje: 'El grupo pasa de ' + t.vueltas + ' a ' + vueltas + ' vueltas.\n' +
+                     'Las ' + est.totalEventos + ' pasadas ya registradas se conservan: ' +
+                     'solo cambia quién aparece como terminado.',
+            confirmar: 'Sí, cambiar', peligro: false
+          });
+          if (!ok) return;
+        }
+        await Estado.guardarTanda({
+          nombre: cNombre.obtenerValor().trim() || t.nombre,
+          vueltas,
+          ventanaMinSeg: cVentana.obtenerValor()
+        });
+        await Estado.guardarConfig({
+          vueltasPorDefecto: vueltas,
+          ventanaPorDefecto: cVentana.obtenerValor()
+        });
+        UI.aviso('Guardado', 'ok');
+        App.tandaCambio();
+      }
+    });
+
+    return UI.tarjeta({
+      titulo: 'Grupo activo',
+      ayuda: 'Estos valores son solo de «' + t.nombre + '». Otro grupo puede correr otra distancia.',
+      cuerpo: UI.el('div', {}, [cNombre, cVueltas, cVentana, guardar])
+    });
   }
 
-  async function guardarConfig(ev) {
-    ev.preventDefault();
-    const vueltas = Math.max(1, Math.min(99, Number($('#cfg-vueltas').value) || 1));
-    const ventana = Math.max(1, Math.min(3600, Number($('#cfg-ventana').value) || 1));
-    const digitosDorsal = Math.max(1, Math.min(6, Number($('#cfg-digitos').value) || 3));
-    const idDispositivo = $('#cfg-dispositivo').value.trim() || Util.idAleatorio('CEL');
-    const rangoDesde = Number($('#cfg-rango-desde').value) || null;
-    const rangoHasta = Number($('#cfg-rango-hasta').value) || null;
+  /* ================= este celular ================= */
 
-    if (rangoDesde && rangoHasta && rangoHasta < rangoDesde) {
-      Util.aviso('El rango de dorsales está al revés', 'error');
-      return;
-    }
-
-    const antes = est.tandaActiva;
-    if (vueltas !== antes.vueltas) {
-      const ok = await Util.confirmar(
-        'Cambiar el número de vueltas',
-        est.tandaActiva.nombre + ' pasará de ' + antes.vueltas + ' a ' + vueltas + ' vueltas.\n' +
-        'Los ' + est.totalEventos + ' eventos registrados se conservan: solo se recalcula ' +
-        'quién ha terminado.',
-        'Sí, cambiar', false);
-      if (!ok) { cargarFormulario(); return; }
-    }
-
-    await Estado.guardarTanda({
-      nombre: $('#cfg-tanda-nombre').value.trim() || antes.nombre,
-      vueltas, ventanaMinSeg: ventana
+  async function abrirCelular() {
+    const cNombre = UI.campo({
+      etiqueta: 'Nombre de este celular',
+      ayuda: 'Debe ser distinto en cada celular: CEL-1, CEL-2… Sirve para saber de dónde vino cada vuelta.',
+      valor: est.config.idDispositivo, maximo: 40
     });
+    const cPuesto = UI.campo({
+      etiqueta: 'Puesto donde estás', valor: est.config.nombrePuesto,
+      marcador: 'Meta izquierda', maximo: 40
+    });
+    const cEvento = UI.campo({
+      etiqueta: 'Nombre del evento', valor: est.config.nombreCarrera, maximo: 60
+    });
+    const cDigitos = UI.contador({
+      etiqueta: 'Dígitos del dorsal',
+      ayuda: 'El teclado registra solo al completar esta cantidad de números.',
+      valor: est.config.digitosDorsal, minimo: 1, maximo: 6
+    });
+    const cDesde = UI.campo({
+      etiqueta: 'Inscribe dorsales desde', tipo: 'number',
+      valor: est.config.rangoDesde || '', marcador: 'sin límite'
+    });
+    const cHasta = UI.campo({
+      etiqueta: 'hasta', tipo: 'number',
+      valor: est.config.rangoHasta || '', marcador: 'sin límite',
+      ayuda: 'Repartan un tramo distinto a cada profesor (CEL-1: 1 a 100, CEL-2: 101 a 200…). ' +
+             'Así varios inscriben al tiempo sin pisarse los números.'
+    });
+
+    const r = await UI.hoja({
+      titulo: 'Este celular',
+      cuerpo: UI.el('div', {}, [cNombre, cPuesto, cEvento, cDigitos, cDesde, cHasta]),
+      acciones: [{ texto: 'Guardar', tipo: 'principal', valor: 'ok' }]
+    });
+    if (r !== 'ok') return;
+
+    const desde = Number(cDesde.obtenerValor()) || null;
+    const hasta = Number(cHasta.obtenerValor()) || null;
+    if (desde && hasta && hasta < desde) { UI.aviso('El rango está al revés', 'error'); return; }
+
     await Estado.guardarConfig({
-      nombreCarrera: $('#cfg-nombre').value.trim() || 'Carrera escolar',
-      digitosDorsal,
-      nombrePuesto: $('#cfg-puesto').value.trim() || 'Meta',
-      idDispositivo,
-      rangoDesde, rangoHasta,
-      vueltasPorDefecto: vueltas,
-      ventanaPorDefecto: ventana
+      idDispositivo: cNombre.obtenerValor().trim() || Util.idAleatorio('CEL'),
+      nombrePuesto: cPuesto.obtenerValor().trim() || 'Meta',
+      nombreCarrera: cEvento.obtenerValor().trim() || 'Carrera escolar',
+      digitosDorsal: cDigitos.obtenerValor(),
+      rangoDesde: desde, rangoHasta: hasta
     });
-    cargarFormulario();
-    Util.aviso('Configuración guardada', 'ok');
+    UI.aviso('Guardado', 'ok');
     App.datosCambiaron();
-    Tandas.refrescar();
+    refrescar();
   }
 
-  /* ---------------- reloj ---------------- */
+  /* ================= verificar la hora ================= */
 
-  function pintarReloj() {
-    const ahora = Date.now();
-    const g = $('#reloj-gigante');
-    if (g) g.textContent = Util.hora(ahora);
-    const f = $('#reloj-fecha');
-    if (f) f.textContent = Util.fecha(ahora);
+  function abrirReloj() {
+    const hora = UI.el('div', { clase: 'reloj-grande__hora' });
+    const fecha = UI.el('div', { clase: 'reloj-grande__fecha' });
+    const tic = () => {
+      hora.textContent = Util.hora(Date.now());
+      fecha.textContent = Util.fecha(Date.now());
+    };
+    tic();
+    clearInterval(relojInterval);
+    relojInterval = setInterval(tic, 500);
+
+    UI.hoja({
+      titulo: 'Verificar la hora',
+      descripcion: 'Pongan los celulares lado a lado y comparen. Si uno va adelantado, las vueltas ' +
+                   'repetidas se pueden colar y los tiempos quedan mal. Actívenle a todos la hora automática.',
+      cuerpo: UI.el('div', {}, [
+        UI.el('div', { clase: 'reloj-grande' }, [hora, fecha]),
+        UI.el('p', {
+          clase: 'campo__ayuda', style: 'margin-top:12px',
+          texto: 'Hora de Bogotá, formato 24 horas. Zona del celular: ' +
+                 (Intl.DateTimeFormat().resolvedOptions().timeZone || 'desconocida') + '.'
+        })
+      ])
+    }).then(() => { clearInterval(relojInterval); relojInterval = null; });
   }
 
-  /* ---------------- padrón ---------------- */
+  /* ================= lista de corredores ================= */
 
-  function accionPadron(accion) {
-    const alcance = $('#sel-alcance-padron').value;
-    if (!est.todos.size) { Util.aviso('No hay corredores que exportar', 'error'); return; }
-    const p = Exportar.paquetePadron(alcance);
-    if (accion === 'descargar') Util.descargar(p.nombre, p.contenido, p.mime);
-    else if (accion === 'compartir') Util.compartir(p.nombre, p.contenido, p.mime);
-    else Util.copiar(p.contenido);
+  async function abrirLista() {
+    const selAlcance = UI.selector({
+      etiqueta: 'De qué grupos',
+      opciones: [
+        { valor: 'activa', texto: 'Solo «' + est.tandaActiva.nombre + '»' },
+        { valor: 'todas', texto: 'Todos los grupos' }
+      ],
+      valor: 'activa'
+    });
+    const entrada = UI.el('input', { type: 'file', accept: 'application/json,.json', hidden: true });
+    entrada.addEventListener('change', async ev => {
+      const a = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (a) { UI.cerrarHoja(null); await importarLista(a); }
+    });
+
+    const r = await UI.hoja({
+      titulo: 'Lista de corredores',
+      descripcion: 'Inscribe en un celular, comparte la lista y ábrela en los demás. La lista lleva ' +
+                   'el grupo adentro, así todos quedan inscribiendo sobre el mismo.',
+      cuerpo: UI.el('div', {}, [selAlcance, entrada]),
+      acciones: [
+        { texto: 'Compartir la lista', icono: 'compartir', tipo: 'principal', valor: 'compartir' },
+        { texto: 'Guardar archivo', icono: 'descargar', valor: 'descargar' },
+        { texto: 'Abrir una lista recibida', icono: 'subir', valor: 'importar' }
+      ]
+    });
+    if (!r) return;
+    if (r === 'importar') { entrada.click(); return; }
+
+    if (!est.todos.size) { UI.aviso('Todavía no hay corredores', 'error'); return; }
+    const p = Exportar.paquetePadron(selAlcance.obtenerValor());
+    if (r === 'descargar') Util.descargar(p.nombre, p.contenido, p.mime);
+    else Util.compartir(p.nombre, p.contenido, p.mime);
   }
 
-  async function importarPadron(ev) {
-    const archivo = ev.target.files && ev.target.files[0];
-    ev.target.value = '';
-    if (!archivo) return;
-
+  async function importarLista(archivo) {
     let texto;
     try { texto = await Util.leerArchivo(archivo); }
-    catch (e) { Util.alerta('Error', e.message); return; }
+    catch (e) { UI.alerta({ titulo: 'No se pudo leer', mensaje: e.message }); return; }
 
     const an = Exportar.analizarPadron(texto, archivo.name);
-    if (!an.ok) { Util.alerta('Padrón no válido', an.mensaje); return; }
+    if (!an.ok) { UI.alerta({ titulo: 'Lista no válida', mensaje: an.mensaje }); return; }
 
-    analisisPadron = an;
-    mapeoPadron = an.mapeo;
-    pintarResumenPadron(archivo.name);
-  }
-
-  function pintarResumenPadron(nombreArchivo) {
-    const caja = $('#resumen-padron');
-    caja.innerHTML = '';
-    caja.hidden = false;
-    const a = analisisPadron.archivo;
-
-    caja.append(Util.el('h3', { texto: 'Archivo: ' + nombreArchivo }));
-    const porTanda = new Map();
-    for (const c of a.corredores) porTanda.set(c.tanda, (porTanda.get(c.tanda) || 0) + 1);
-    const ul = Util.el('ul', {}, [
-      Util.el('li', { texto: a.corredores.length + ' corredores' }),
-      Util.el('li', { texto: a.corredores.filter(c => c.uid).length + ' con manilla vinculada' }),
-      Util.el('li', { texto: 'Esquema v' + a.esquema })
+    const a = an.archivo;
+    const cuerpo = UI.el('div', {}, [
+      UI.el('ul', { clase: 'campo__ayuda', style: 'padding-left:20px' }, [
+        UI.el('li', { texto: a.corredores.length + ' corredores en el archivo' }),
+        UI.el('li', { texto: a.corredores.filter(c => c.uid).length + ' con manilla asignada' })
+      ]),
+      cajaMapeo(an.mapeo)
     ]);
-    caja.append(ul);
 
-    caja.append(Util.el('h3', { texto: '¿A qué tanda va cada grupo?' }));
-    caja.append(cajaMapeo(mapeoPadron, porTanda));
+    const modo = await UI.hoja({
+      titulo: 'Abrir «' + archivo.name + '»',
+      cuerpo,
+      acciones: [
+        { texto: 'Juntar con lo que ya tengo', tipo: 'principal', valor: 'fusionar' },
+        { texto: 'Reemplazar lo que tengo', tipo: 'peligro', valor: 'reemplazar' }
+      ]
+    });
+    if (!modo) return;
 
-    caja.append(Util.el('button', {
-      clase: 'btn btn-primario', type: 'button', texto: '🔗 Fusionar con lo que ya tengo',
-      onclick: () => aplicarPadron('fusionar')
-    }));
-    caja.append(Util.el('button', {
-      clase: 'btn btn-peligro', type: 'button', texto: '♻️ Reemplazar esas tandas',
-      onclick: () => aplicarPadron('reemplazar')
-    }));
-    caja.append(Util.el('button', {
-      clase: 'btn btn-secundario', type: 'button', texto: 'Cancelar',
-      onclick: () => { caja.hidden = true; caja.innerHTML = ''; analisisPadron = null; }
-    }));
+    if (modo === 'reemplazar') {
+      const ok = await UI.confirmar({
+        titulo: 'Reemplazar la lista',
+        mensaje: 'Se borran los corredores que este celular tenga en esos grupos y quedan solo ' +
+                 'los del archivo. Las vueltas ya registradas no se borran.',
+        confirmar: 'Sí, reemplazar'
+      });
+      if (!ok) return;
+    }
+
+    const res = await Exportar.aplicarPadron(an, an.mapeo, modo);
+    UI.aviso('Lista abierta: ' + res.total + ' corredores', 'ok');
+    App.tandaCambio();
   }
 
-  /** Tabla de mapeo tanda del archivo -> tanda local. */
-  function cajaMapeo(mapeo, conteos) {
-    const caja = Util.el('div', {});
+  /** Elige a qué grupo local corresponde cada grupo del archivo. */
+  function cajaMapeo(mapeo) {
+    const caja = UI.el('div');
     for (const m of mapeo) {
-      const sel = Util.el('select', {});
-      sel.append(Util.el('option', { value: '__nueva__', texto: '➕ Crear como tanda nueva' }));
-      for (const t of Array.from(est.tandas.values()).sort((a, b) => b.creadaEn - a.creadaEn)) {
-        sel.append(Util.el('option', { value: t.id, texto: 'Unir a: ' + t.nombre }));
-      }
-      sel.value = m.destino;
-      sel.addEventListener('change', e => { m.destino = e.target.value; });
-
-      const cuantos = conteos ? (conteos.get(m.origen) || 0) : null;
-      caja.append(Util.el('div', { clase: 'mapeo-fila' }, [
-        Util.el('span', { clase: 'mapeo-nombre', texto: m.nombre }),
-        Util.el('span', { clase: 'item-codigo', texto: m.origen + (cuantos != null ? ' · ' + cuantos + ' corredores' : '') }),
-        sel,
-        Util.el('span', { clase: 'item-meta', texto: m.motivo })
-      ]));
+      const opciones = [{ valor: '__nueva__', texto: 'Crear como grupo nuevo' }].concat(
+        Array.from(est.tandas.values())
+          .sort((a, b) => b.creadaEn - a.creadaEn)
+          .map(t => ({ valor: t.id, texto: 'Juntar con «' + t.nombre + '»' })));
+      caja.append(UI.selector({
+        etiqueta: 'El grupo «' + m.nombre + '» del archivo',
+        ayuda: m.motivo === 'no existe aquí' ? 'No existe en este celular.' : 'Reconocido: ' + m.motivo,
+        opciones, valor: m.destino,
+        alCambiar: v => { m.destino = v; }
+      }));
     }
     return caja;
   }
 
-  async function aplicarPadron(modo) {
-    if (!analisisPadron) return;
-    const texto = modo === 'reemplazar'
-      ? 'Se eliminarán los corredores que este dispositivo tenga en las tandas de destino y se dejarán solo los del archivo.\nLas vueltas ya registradas no se borran.'
-      : 'Se conservará lo que ya tienes y se completará lo que falte (nombres, categorías y manillas vacías).';
-    const ok = await Util.confirmar('Importar padrón', texto,
-      modo === 'reemplazar' ? 'Sí, reemplazar' : 'Sí, fusionar', modo === 'reemplazar');
-    if (!ok) return;
+  /* ================= juntar celulares ================= */
 
-    const r = await Exportar.aplicarPadron(analisisPadron, mapeoPadron, modo);
-    Util.aviso('Padrón importado: ' + r.total + ' corredores', 'ok');
-    $('#resumen-padron').hidden = true;
-    $('#resumen-padron').innerHTML = '';
-    analisisPadron = null;
-    App.tandaCambio();
+  async function abrirUnion() {
+    const entrada = UI.el('input', { type: 'file', accept: 'application/json,.json', multiple: true, hidden: true });
+    entrada.addEventListener('change', async ev => {
+      const archivos = Array.from(ev.target.files || []);
+      ev.target.value = '';
+      if (archivos.length) { UI.cerrarHoja(null); await procesarUnion(archivos); }
+    });
+
+    const hayRespaldo = await Exportar.hayUnionPrevia();
+    const acciones = [{ texto: 'Elegir los archivos', icono: 'subir', tipo: 'principal', valor: 'cargar' }];
+    if (hayRespaldo) acciones.push({ texto: 'Deshacer la última vez', icono: 'deshacer', tipo: 'peligro', valor: 'deshacer' });
+
+    const r = await UI.hoja({
+      titulo: 'Juntar los datos de los celulares',
+      descripcion: 'Al final de la carrera, cada profesor comparte su copia de seguridad. Aquí se ' +
+                   'juntan todas, se quitan las vueltas repetidas y queda la tabla definitiva.',
+      cuerpo: UI.el('div', {}, [entrada]),
+      acciones
+    });
+    if (r === 'cargar') entrada.click();
+    else if (r === 'deshacer') deshacerUnion();
   }
 
-  /* ---------------- unir dispositivos ---------------- */
-
-  async function cargarArchivosUnion(ev) {
-    const archivos = Array.from(ev.target.files || []);
-    ev.target.value = '';
-    if (!archivos.length) return;
-
+  async function procesarUnion(archivos) {
     const analizados = [];
     for (const a of archivos) {
-      try {
-        analizados.push(Exportar.analizarArchivo(await Util.leerArchivo(a), a.name));
-      } catch (e) {
-        analizados.push({ ok: false, archivo: a.name, mensaje: e.message });
-      }
+      try { analizados.push(Exportar.analizarArchivo(await Util.leerArchivo(a), a.name)); }
+      catch (e) { analizados.push({ ok: false, archivo: a.name, mensaje: e.message }); }
     }
-
     const buenos = analizados.filter(a => a.ok);
     if (!buenos.length) {
-      Util.alerta('Sin datos utilizables', analizados.map(a => a.archivo + ': ' + a.mensaje).join('\n'));
+      UI.alerta({
+        titulo: 'No se pudo usar ningún archivo',
+        mensaje: analizados.map(a => a.archivo + ': ' + a.mensaje).join('\n')
+      });
       return;
     }
 
-    archivosUnion = { todos: analizados, buenos };
-    mapeoUnion = Exportar.proponerMapeo(buenos);
-    planUnion = null;
-    pintarPasoMapeo();
+    const mapeo = Exportar.proponerMapeo(buenos);
+    const resumen = UI.el('div', {}, [
+      UI.el('ul', { clase: 'campo__ayuda', style: 'padding-left:20px' },
+        analizados.map(a => UI.el('li', {
+          clase: a.ok ? '' : 'marca-mal',
+          texto: a.ok ? a.archivo + ' — ' + a.dispositivo + ', ' + a.eventos.length + ' pasadas'
+                      : a.archivo + ' — ' + a.mensaje
+        }))),
+      cajaMapeo(mapeo)
+    ]);
+
+    const r = await UI.hoja({
+      titulo: 'Archivos leídos',
+      cuerpo: resumen,
+      acciones: [{ texto: 'Calcular', tipo: 'principal', valor: 'ok' }]
+    });
+    if (r !== 'ok') return;
+
+    mostrarPlan(Exportar.prepararUnion(buenos, mapeo));
   }
 
-  function pintarPasoMapeo() {
-    const caja = $('#resumen-union');
-    caja.innerHTML = '';
-    caja.hidden = false;
+  async function mostrarPlan(plan) {
+    const cuerpo = UI.el('div');
 
-    caja.append(Util.el('h3', { texto: 'Archivos leídos' }));
-    const ua = Util.el('ul', {});
-    for (const a of archivosUnion.todos) {
-      ua.append(Util.el('li', {
-        clase: a.ok ? '' : 'malo',
-        texto: a.ok
-          ? a.archivo + ' → ' + a.dispositivo + (a.puesto ? ' (' + a.puesto + ')' : '') +
-            ' · ' + a.eventos.length + ' eventos · ' + a.corredores.length + ' corredores'
-          : a.archivo + ' → ' + a.mensaje
-      }));
-    }
-    caja.append(ua);
-
-    caja.append(Util.el('h3', { texto: '¿A qué tanda corresponde cada grupo?' }));
-    caja.append(Util.el('p', {
-      clase: 'nota',
-      texto: 'Si todos los celulares importaron el mismo padrón, esto ya viene resuelto. ' +
-             'Solo hay que tocarlo si alguien creó la tanda por su cuenta.'
-    }));
-    caja.append(cajaMapeo(mapeoUnion, null));
-
-    caja.append(Util.el('button', {
-      clase: 'btn btn-primario', type: 'button', texto: '🔎 Calcular la unión',
-      onclick: calcularUnion
-    }));
-    caja.append(Util.el('button', {
-      clase: 'btn btn-secundario', type: 'button', texto: 'Cancelar',
-      onclick: cancelarUnion
-    }));
-  }
-
-  function cancelarUnion() {
-    archivosUnion = null; mapeoUnion = null; planUnion = null;
-    $('#resumen-union').hidden = true;
-    $('#resumen-union').innerHTML = '';
-  }
-
-  function calcularUnion() {
-    planUnion = Exportar.prepararUnion(archivosUnion.buenos, mapeoUnion);
-    pintarResumenUnion();
-  }
-
-  function pintarResumenUnion() {
-    const caja = $('#resumen-union');
-    caja.innerHTML = '';
-    caja.hidden = false;
-    const p = planUnion;
-
-    caja.append(Util.el('h3', { texto: 'Resultado de la deduplicación' }));
-    caja.append(Util.el('ul', {}, [
-      Util.el('li', { texto: p.totalLeidos + ' marcas leídas en total (incluye las de este dispositivo)' }),
-      Util.el('li', { clase: 'bueno', texto: p.aceptados.length + ' vueltas válidas' }),
-      Util.el('li', { clase: p.descartes.length ? 'malo' : '', texto: p.descartes.length + ' marcas descartadas por repetición dentro de la ventana de su tanda' }),
-      Util.el('li', { texto: p.nuevos.length + ' corredores nuevos · ' + p.completados.length + ' completados con datos de otro celular' })
+    cuerpo.append(UI.el('div', { clase: 'cifras' }, [
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: String(plan.aceptados.length) }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Vueltas' })
+      ]),
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: String(plan.descartes.length) }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Repetidas' })
+      ]),
+      UI.el('div', { clase: 'cifra' }, [
+        UI.el('span', { clase: 'cifra__num', texto: String(plan.corredores.length) }),
+        UI.el('span', { clase: 'cifra__etq', texto: 'Corredores' })
+      ])
     ]));
 
-    /* ---- conflictos que decide una persona ---- */
-    if (p.conflictos.length) {
-      caja.append(Util.el('h3', { clase: 'malo', texto: '⚠️ Conflictos de inscripción (' + p.conflictos.length + ')' }));
-      caja.append(Util.el('p', {
-        clase: 'nota',
-        texto: 'La unión conserva lo que ya hay en este dispositivo. Revisa estos casos a mano ' +
-               'después de unir; evita que se repitan repartiendo rangos de dorsales por organizador.'
-      }));
-      const t = Util.el('table');
-      t.append(Util.el('tr', {}, [
-        Util.el('th', { texto: 'Tanda' }), Util.el('th', { clase: 'num', texto: 'Dorsal' }),
-        Util.el('th', { texto: 'Se conserva' }), Util.el('th', { texto: 'Se ignora' })
-      ]));
-      for (const c of p.conflictos.slice(0, 40)) {
-        if (c.tipo === 'nombre') {
-          t.append(Util.el('tr', {}, [
-            Util.el('td', { texto: nombreTanda(c.tanda) }),
-            Util.el('td', { clase: 'num', texto: String(c.dorsal) }),
-            Util.el('td', { texto: c.actual }),
-            Util.el('td', { texto: c.entrante + ' (' + c.archivo + ')' })
-          ]));
-        } else {
-          t.append(Util.el('tr', {}, [
-            Util.el('td', { texto: nombreTanda(c.tanda) }),
-            Util.el('td', { clase: 'num', texto: String(c.dorsalConservado) }),
-            Util.el('td', { texto: 'manilla ' + c.uid }),
-            Util.el('td', { texto: 'se libera del dorsal ' + c.dorsalLiberado })
-          ]));
-        }
-      }
-      caja.append(t);
-      if (p.conflictos.length > 40) {
-        caja.append(Util.el('p', { clase: 'nota', texto: '… y ' + (p.conflictos.length - 40) + ' más.' }));
-      }
-    }
+    cuerpo.append(UI.el('p', {
+      clase: 'campo__ayuda', style: 'margin-bottom:12px',
+      texto: 'Se leyeron ' + plan.totalLeidos + ' pasadas en total. Las repetidas son las que el ' +
+             'mismo corredor marcó dos veces seguidas en celulares distintos: se cuenta una sola.'
+    }));
 
-    if (p.huerfanos.length) {
-      caja.append(Util.el('p', {
-        clase: 'malo',
-        texto: 'Hay marcas de dorsales sin inscribir: ' + p.huerfanos.slice(0, 15).join(', ') +
-               (p.huerfanos.length > 15 ? '…' : '') + '. Se conservan, pero saldrán sin nombre.'
+    if (plan.conflictos.length) {
+      cuerpo.append(UI.nota({
+        tono: 'ojo',
+        texto: plan.conflictos.length + ' corredores tienen datos distintos en dos celulares ' +
+               '(por ejemplo el mismo dorsal con dos nombres). Se conserva lo de este celular; ' +
+               'revísalos después en Inscripción.'
+      }));
+    }
+    if (plan.huerfanos.length) {
+      cuerpo.append(UI.nota({
+        tono: 'ojo',
+        texto: 'Hay vueltas de dorsales que nadie inscribió: ' +
+               plan.huerfanos.slice(0, 8).join(', ') + (plan.huerfanos.length > 8 ? '…' : '') +
+               '. Se conservan, pero saldrán sin nombre.'
       }));
     }
 
-    /* ---- por tanda ---- */
-    caja.append(Util.el('h3', { texto: 'Por tanda' }));
-    const tt = Util.el('table');
-    tt.append(Util.el('tr', {}, [
-      Util.el('th', { texto: 'Tanda' }),
-      Util.el('th', { clase: 'num', texto: 'Corredores' }),
-      Util.el('th', { clase: 'num', texto: 'Vueltas' }),
-      Util.el('th', { clase: 'num', texto: 'Descartes' })
-    ]));
-    for (const r of p.porTanda) {
-      tt.append(Util.el('tr', {}, [
-        Util.el('td', { texto: r.nombre + (p.tandasNuevas.includes(r.id) ? ' (nueva)' : '') }),
-        Util.el('td', { clase: 'num', texto: String(r.corredores) }),
-        Util.el('td', { clase: 'num', texto: String(r.eventos) }),
-        Util.el('td', { clase: 'num', texto: String(r.descartes) })
-      ]));
-    }
-    caja.append(tt);
-
-    /* ---- por dispositivo ---- */
-    caja.append(Util.el('h3', { texto: 'Por dispositivo' }));
-    const td = Util.el('table');
-    td.append(Util.el('tr', {}, [
-      Util.el('th', { texto: 'Dispositivo' }),
-      Util.el('th', { clase: 'num', texto: 'Leídas' }),
-      Util.el('th', { clase: 'num', texto: 'Válidas' }),
-      Util.el('th', { clase: 'num', texto: 'Descartadas' })
-    ]));
-    for (const r of p.porDispositivo) {
-      td.append(Util.el('tr', {}, [
-        Util.el('td', { texto: r.dispositivo }),
-        Util.el('td', { clase: 'num', texto: String(r.leidos) }),
-        Util.el('td', { clase: 'num', texto: String(r.aceptados) }),
-        Util.el('td', { clase: 'num', texto: String(r.descartados) })
-      ]));
-    }
-    caja.append(td);
-
-    /* ---- reporte de descartes ---- */
-    if (p.descartes.length) {
-      caja.append(Util.el('h3', { texto: 'Reporte de descartes' }));
-      const t = Util.el('table');
-      t.append(Util.el('tr', {}, [
-        Util.el('th', { texto: 'Tanda' }),
-        Util.el('th', { clase: 'num', texto: 'Dorsal' }),
-        Util.el('th', { texto: 'Se conserva' }),
-        Util.el('th', { texto: 'Se descarta' }),
-        Util.el('th', { clase: 'num', texto: 'Δ s' })
-      ]));
-      for (const d of p.descartes.slice(0, 80)) {
-        t.append(Util.el('tr', {}, [
-          Util.el('td', { texto: nombreTanda(d.tanda) }),
-          Util.el('td', { clase: 'num', texto: String(d.dorsal) }),
-          Util.el('td', { texto: Util.hora(d.horaConservada) + ' · ' + d.dispositivoConservado }),
-          Util.el('td', { texto: Util.hora(d.horaDescartada) + ' · ' + d.dispositivoDescartado }),
-          Util.el('td', { clase: 'num', texto: String(d.diferenciaSeg) })
+    if (plan.porDispositivo.length) {
+      cuerpo.append(UI.el('h3', { style: 'font-size:15px;margin:16px 0 8px', texto: 'Por celular' }));
+      const lista = UI.el('div', { clase: 'lista' });
+      for (const d of plan.porDispositivo) {
+        lista.append(UI.el('div', { clase: 'fila' }, [
+          UI.icono('celular'),
+          UI.el('div', { clase: 'fila__cuerpo' }, [
+            UI.el('div', { clase: 'fila__titulo', texto: d.dispositivo }),
+            UI.el('div', { clase: 'fila__meta', texto: d.aceptados + ' vueltas · ' + d.descartados + ' repetidas' })
+          ])
         ]));
       }
-      caja.append(t);
-      if (p.descartes.length > 80) {
-        caja.append(Util.el('p', { clase: 'nota', texto: '… y ' + (p.descartes.length - 80) + ' descartes más. Descarga el reporte para verlos todos.' }));
-      }
-      caja.append(Util.el('button', {
-        clase: 'btn btn-secundario', type: 'button', texto: '⬇️ Descargar reporte de descartes (CSV)',
-        onclick: () => Util.descargar(
-          'descartes_' + Util.selloArchivo(Date.now()) + '.csv',
-          Exportar.csvDescartes(p.descartes), 'text/csv')
+      cuerpo.append(lista);
+    }
+
+    if (plan.descartes.length) {
+      cuerpo.append(UI.el('div', { style: 'height:12px' }));
+      cuerpo.append(UI.boton({
+        texto: 'Guardar el detalle de las repetidas', icono: 'descargar', ancho: 'completo',
+        alPulsar: () => Util.descargar(
+          'repetidas_' + Util.selloArchivo(Date.now()) + '.csv',
+          Exportar.csvDescartes(plan.descartes), 'text/csv')
       }));
     }
 
-    caja.append(Util.el('button', {
-      clase: 'btn btn-primario', type: 'button', texto: '✅ Aplicar unión y recalcular la tabla',
-      onclick: aplicarUnion
-    }));
-    caja.append(Util.el('button', {
-      clase: 'btn btn-secundario', type: 'button', texto: '← Volver al mapeo de tandas',
-      onclick: pintarPasoMapeo
-    }));
-    caja.append(Util.el('button', {
-      clase: 'btn btn-secundario', type: 'button', texto: 'Cancelar',
-      onclick: cancelarUnion
-    }));
-  }
+    const r = await UI.hoja({
+      titulo: 'Resultado de juntar',
+      cuerpo,
+      acciones: [{ texto: 'Aplicar y ver la tabla final', tipo: 'principal', valor: 'ok' }]
+    });
+    if (r !== 'ok') return;
 
-  function nombreTanda(id) {
-    const t = est.tandas.get(id);
-    return t ? t.nombre : id;
-  }
-
-  async function aplicarUnion() {
-    if (!planUnion) return;
-    const ok = await Util.confirmar(
-      'Aplicar la unión',
-      'Los datos de este dispositivo se reemplazarán por el resultado: ' +
-      planUnion.aceptados.length + ' vueltas y ' + planUnion.corredores.length + ' corredores.\n' +
-      'Se guarda un respaldo: podrás deshacerlo.',
-      'Sí, aplicar', false);
+    const ok = await UI.confirmar({
+      titulo: 'Aplicar',
+      mensaje: 'Los datos de este celular se reemplazan por el resultado.\n' +
+               'Se guarda una copia: podrás deshacerlo.',
+      confirmar: 'Sí, aplicar', peligro: false
+    });
     if (!ok) return;
 
-    const n = await Exportar.aplicarUnion(planUnion);
-    cancelarUnion();
-    $('#btn-deshacer-union').hidden = false;
-    Util.aviso('Unión aplicada: ' + n + ' vueltas válidas', 'ok');
+    const n = await Exportar.aplicarUnion(plan);
+    UI.aviso('Listo: ' + n + ' vueltas', 'ok');
     App.tandaCambio();
     App.irA('posiciones');
   }
 
   async function deshacerUnion() {
-    const ok = await Util.confirmar(
-      'Deshacer la unión',
-      'Se restaurarán las tandas, los corredores y los eventos que tenía este dispositivo antes de la última unión.',
-      'Sí, deshacer');
+    const ok = await UI.confirmar({
+      titulo: 'Deshacer',
+      mensaje: 'Se restaura lo que tenía este celular antes de juntar los datos.',
+      confirmar: 'Sí, deshacer'
+    });
     if (!ok) return;
     if (await Exportar.deshacerUnion()) {
-      $('#btn-deshacer-union').hidden = true;
-      Util.aviso('Unión deshecha', 'ok');
+      UI.aviso('Deshecho', 'ok');
       App.tandaCambio();
-    } else {
-      Util.aviso('No hay ninguna unión que deshacer', 'error');
-    }
+    } else UI.aviso('No hay nada que deshacer', 'error');
   }
 
-  /* ---------------- diagnóstico ---------------- */
+  /* ================= revisión del sistema ================= */
 
-  function fila(estado, titulo, detalle) {
-    const icono = estado === 'ok' ? '✅' : estado === 'error' ? '⛔' : '⚠️';
-    return Util.el('div', { clase: 'item ' + (estado === 'ok' ? 'ok' : estado === 'error' ? 'error' : 'final') }, [
-      Util.el('span', { clase: 'item-dorsal', texto: icono }),
-      Util.el('div', { clase: 'item-cuerpo' }, [
-        Util.el('strong', { texto: titulo }),
-        Util.el('span', { clase: 'item-meta', texto: detalle })
+  async function abrirRevision() {
+    const cuerpo = UI.el('div', { clase: 'lista' });
+    const punto = (estado, titulo, detalle) => cuerpo.append(UI.el('div', {
+      clase: 'fila fila--' + (estado === 'ok' ? 'ok' : estado === 'error' ? 'error' : 'meta')
+    }, [
+      UI.icono(estado === 'ok' ? 'cheque' : 'alerta'),
+      UI.el('div', { clase: 'fila__cuerpo' }, [
+        UI.el('div', { clase: 'fila__titulo', texto: titulo }),
+        UI.el('div', { clase: 'fila__meta', style: 'white-space:normal', texto: detalle })
       ])
-    ]);
-  }
+    ]));
 
-  async function diagnosticar() {
-    const caja = $('#diagnostico');
-    caja.innerHTML = '';
+    punto(NFC.disponible() ? 'ok' : 'error', 'Lectura de manillas',
+      NFC.disponible() ? 'Este celular puede leer manillas.'
+        : 'Este navegador no lee NFC. Usa Chrome en un Android con NFC; mientras tanto, el teclado funciona.');
 
-    caja.append(window.isSecureContext
-      ? fila('ok', 'Contexto seguro', 'La página se sirve por https o localhost.')
-      : fila('error', 'Contexto NO seguro', 'Web NFC exige https. Abre la app desde su dirección https.'));
-
-    caja.append(NFC.disponible()
-      ? fila('ok', 'Web NFC disponible', 'El navegador expone NDEFReader.')
-      : fila('error', 'Web NFC no disponible', 'Usa Chrome para Android 124+ en un equipo con NFC. La app funciona en modo teclado.'));
+    punto(window.isSecureContext ? 'ok' : 'error', 'Conexión segura',
+      window.isSecureContext ? 'La página se abrió de forma segura.'
+        : 'Hay que abrir la app por su dirección https para que el NFC funcione.');
 
     const permiso = await NFC.estadoPermiso();
-    caja.append(
-      permiso === 'granted' ? fila('ok', 'Permiso de NFC', 'Concedido.') :
-      permiso === 'denied' ? fila('error', 'Permiso de NFC', 'Denegado. Candado junto a la dirección → Permisos → NFC.') :
-      permiso === 'prompt' ? fila('aviso', 'Permiso de NFC', 'Se pedirá al activar la lectura.') :
-      fila('aviso', 'Permiso de NFC', 'El navegador no informa el estado; se sabrá al activar la lectura.'));
+    punto(permiso === 'granted' ? 'ok' : permiso === 'denied' ? 'error' : 'aviso', 'Permiso de NFC',
+      permiso === 'granted' ? 'Concedido.'
+        : permiso === 'denied' ? 'Bloqueado. Toca el candado junto a la dirección y permite el NFC.'
+        : 'Se pedirá la primera vez que actives la lectura.');
 
-    caja.append(Util.esWebView()
-      ? fila('error', 'Navegador incrustado detectado', 'Estás dentro de otra app (Gmail, WhatsApp…). Abre la página en Chrome: menú ⋮ → «Abrir en Chrome».')
-      : fila('ok', 'Navegador independiente', 'No se detectó un WebView incrustado.'));
+    punto(Util.esWebView() ? 'error' : 'ok', 'Navegador',
+      Util.esWebView() ? 'Abriste la app dentro de otra aplicación. Ábrela en Chrome: menú ⋮ → Abrir en Chrome.'
+        : 'Estás en un navegador normal.');
 
     try {
       const persistido = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : false;
-      let detalle = persistido
-        ? 'Almacenamiento persistente concedido: el sistema no borrará los datos.'
-        : 'Almacenamiento no persistente: el sistema podría liberar espacio. Instala la app para reducir el riesgo.';
-      if (navigator.storage && navigator.storage.estimate) {
-        const e = await navigator.storage.estimate();
-        if (e && e.usage != null) {
-          detalle += ' Uso: ' + (e.usage / 1024).toFixed(0) + ' KB' +
-                     (e.quota ? ' de ' + (e.quota / 1048576).toFixed(0) + ' MB.' : '.');
-        }
-      }
-      caja.append(fila(persistido ? 'ok' : 'aviso', 'Almacenamiento', detalle));
-    } catch (_) {
-      caja.append(fila('aviso', 'Almacenamiento', 'No se pudo consultar el estado.'));
-    }
-
-    let eventosTotales = 0;
-    for (const t of est.tandas.values()) eventosTotales += Estado.resumenTanda(t.id).eventos;
-    caja.append(fila('ok', 'Datos guardados',
-      est.tandas.size + ' tandas · ' + est.todos.size + ' corredores · ' + eventosTotales +
-      ' eventos · esquema v' + DB.ESQUEMA));
-
-    caja.append(fila('ok', 'Tanda activa',
-      est.tandaActiva.nombre + ' (' + est.tandaActiva.id + ') · ' +
-      Estado.vueltas() + ' vueltas · ventana ' + est.tandaActiva.ventanaMinSeg + ' s · ' +
-      Estado.oleadas().length + ' oleada(s)'));
-
-    const r = Estado.resumen();
-    if (r.sinChip) {
-      caja.append(fila('aviso', 'Corredores sin manilla',
-        r.sinChip + ' de ' + r.inscritos + ' no tienen manilla vinculada en esta tanda. ' +
-        'Solo podrán registrarse con el teclado.'));
-    } else if (r.inscritos) {
-      caja.append(fila('ok', 'Manillas', 'Los ' + r.inscritos + ' inscritos tienen manilla vinculada.'));
-    }
-
-    const sinSalida = Estado.oleadas().filter(o => !o.horaSalida);
-    if (sinSalida.length) {
-      caja.append(fila('aviso', 'Salidas sin marcar',
-        sinSalida.map(o => o.nombre).join(', ') + '. Sin hora de salida los tiempos netos no son comparables.'));
-    } else {
-      caja.append(fila('ok', 'Salidas', 'Todas las oleadas tienen hora de salida.'));
-    }
+      punto(persistido ? 'ok' : 'aviso', 'Guardado de datos',
+        persistido ? 'El sistema no borrará los datos por falta de espacio.'
+          : 'Instala la app en la pantalla de inicio para que el sistema no borre los datos.');
+    } catch (_) { /* sin información */ }
 
     const sw = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
-    caja.append(sw
-      ? fila('ok', 'Modo sin conexión', 'Service worker activo: la app abre sin red.')
-      : fila('aviso', 'Modo sin conexión', 'El service worker aún no está registrado. Recarga con red una vez.'));
+    punto(sw ? 'ok' : 'aviso', 'Funciona sin internet',
+      sw ? 'La app abre aunque no haya señal.' : 'Abre la app una vez con internet para que quede lista.');
 
-    caja.append('wakeLock' in navigator
-      ? fila('ok', 'Pantalla siempre encendida', 'Wake Lock disponible.')
-      : fila('aviso', 'Pantalla siempre encendida', 'Sin Wake Lock: sube el tiempo de apagado en los ajustes del celular.'));
+    punto('wakeLock' in navigator ? 'ok' : 'aviso', 'Pantalla encendida',
+      'wakeLock' in navigator ? 'La pantalla no se apaga mientras lees manillas.'
+        : 'Sube el tiempo de apagado en los ajustes del celular.');
 
-    caja.append(navigator.vibrate
-      ? fila('ok', 'Vibración', 'Disponible.')
-      : fila('aviso', 'Vibración', 'No disponible: guíate por el sonido y el color.'));
+    const r = Estado.resumen();
+    punto(r.sinChip ? 'aviso' : 'ok', 'Manillas asignadas',
+      r.sinChip ? r.sinChip + ' de ' + r.inscritos + ' corredores no tienen manilla. Solo se pueden registrar con el teclado.'
+        : r.inscritos ? 'Todos los inscritos tienen manilla.' : 'Todavía no hay corredores.');
 
-    const instalada = window.matchMedia('(display-mode: standalone)').matches;
-    caja.append(instalada
-      ? fila('ok', 'App instalada', 'Se está ejecutando como aplicación.')
-      : fila('aviso', 'App no instalada', 'Instálala desde el menú de Chrome → «Instalar aplicación».'));
+    const sinSalida = Estado.oleadas().filter(o => !o.horaSalida);
+    punto(sinSalida.length ? 'aviso' : 'ok', 'Horas de salida',
+      sinSalida.length ? 'Falta marcar: ' + sinSalida.map(o => o.nombre).join(', ') + '.'
+        : 'Todas las salidas tienen su hora.');
+
+    let eventos = 0;
+    for (const t of est.tandas.values()) eventos += Estado.resumenTanda(t.id).eventos;
+    punto('ok', 'Datos guardados',
+      est.tandas.size + (est.tandas.size === 1 ? ' grupo · ' : ' grupos · ') +
+      est.todos.size + ' corredores · ' + eventos + ' pasadas');
+
+    UI.hoja({ titulo: 'Revisión del sistema', cuerpo });
   }
 
-  /* ---------------- zona de riesgo ---------------- */
+  /* ================= zona de riesgo ================= */
 
   async function datosDePrueba() {
-    const ok = await Util.confirmar(
-      'Cargar datos de prueba',
-      'Se creará una tanda de ensayo con 40 corredores, 2 oleadas separadas 35 segundos y ' +
-      'vueltas simuladas, para practicar antes de la carrera.\n' +
-      'No toca las tandas que ya tengas.',
-      'Sí, cargar', false);
+    const ok = await UI.confirmar({
+      titulo: 'Cargar datos de prueba',
+      mensaje: 'Crea un grupo de ensayo con 40 corredores, 2 salidas separadas 35 segundos y ' +
+               'vueltas inventadas, para practicar.\nNo toca los grupos que ya tengas.',
+      confirmar: 'Sí, cargar', peligro: false
+    });
     if (!ok) return;
 
     const nombres = ['Ana', 'Luis', 'Sofía', 'Mateo', 'Valeria', 'Samuel', 'Isabella', 'Tomás',
@@ -558,25 +507,22 @@ const Ajustes = (() => {
     const apellidos = ['Gómez', 'Rodríguez', 'Martínez', 'López', 'Ramírez', 'Torres', 'Castro', 'Vargas'];
     const cats = ['Infantil', 'Juvenil', 'Mayores'];
 
-    const total = 5;
-    const ventana = 60;
+    const total = 5, ventana = 60, ms = ventana * 1000;
     const tanda = await Estado.crearTanda({
       nombre: 'Prueba ' + Util.horaCorta(Date.now()),
-      vueltas: total,
-      ventanaMinSeg: ventana,
+      vueltas: total, ventanaMinSeg: ventana,
       oleadas: [
-        { id: 1, nombre: 'Oleada 1', horaSalida: null },
-        { id: 2, nombre: 'Oleada 2', horaSalida: null }
+        { id: 1, nombre: 'Salida 1', horaSalida: null },
+        { id: 2, nombre: 'Salida 2', horaSalida: null }
       ]
     });
 
-    const ms = ventana * 1000;
     const salida1 = Date.now() - (total + 1) * ms;
-    const salida2 = salida1 + 35000;   // la segunda oleada sale 35 s después
+    const salida2 = salida1 + 35000;
     await Estado.guardarTandaPorId(tanda.id, {
       oleadas: [
-        { id: 1, nombre: 'Oleada 1', horaSalida: salida1 },
-        { id: 2, nombre: 'Oleada 2', horaSalida: salida2 }
+        { id: 1, nombre: 'Salida 1', horaSalida: salida1 },
+        { id: 2, nombre: 'Salida 2', horaSalida: salida2 }
       ]
     });
 
@@ -585,8 +531,7 @@ const Ajustes = (() => {
       const dorsal = 101 + i;
       corredores.push({
         id: Estado.claveCorredor(tanda.id, dorsal),
-        tanda: tanda.id,
-        dorsal,
+        tanda: tanda.id, dorsal,
         nombre: nombres[i % nombres.length] + ' ' + apellidos[i % apellidos.length],
         categoria: cats[i % cats.length],
         uid: '04:' + ('0' + (i + 1).toString(16).toUpperCase()).slice(-2) + ':DE:MO',
@@ -603,10 +548,7 @@ const Ajustes = (() => {
       let t = salida;
       for (let v = 0; v < vueltas; v++) {
         t += ritmo;
-        eventos.push({
-          tanda: tanda.id, dorsal: c.dorsal, ts: Math.round(t),
-          metodo: 'nfc', dispositivo: est.config.idDispositivo
-        });
+        eventos.push({ tanda: tanda.id, dorsal: c.dorsal, ts: Math.round(t), metodo: 'nfc', dispositivo: est.config.idDispositivo });
       }
     }
     await DB.ponerVarios('eventos', eventos);
@@ -614,71 +556,132 @@ const Ajustes = (() => {
     Estado.reconstruirCorredores(await DB.todo('corredores'));
     Estado.reconstruirEventos(await DB.todo('eventos'));
     await Estado.activarTanda(tanda.id);
-    Util.aviso('Tanda de prueba creada con 40 corredores en 2 oleadas', 'ok');
+    UI.aviso('Grupo de prueba creado', 'ok');
     App.tandaCambio();
   }
 
   async function borrarVueltas() {
-    const ok = await Util.confirmar(
-      'Borrar las vueltas de ' + est.tandaActiva.nombre,
-      'Se eliminarán los ' + est.totalEventos + ' eventos y las ' + est.pendientes.length +
-      ' marcas pendientes de esta tanda, y se borrarán sus horas de salida.\n' +
-      'Los corredores y sus manillas se conservan. Las demás tandas no se tocan.\n' +
-      'Esta acción no se puede deshacer: exporta antes si quieres conservarlas.',
-      'Sí, borrar las vueltas');
+    const ok = await UI.confirmar({
+      titulo: 'Borrar las vueltas de «' + est.tandaActiva.nombre + '»',
+      mensaje: 'Se borran ' + est.totalEventos + ' pasadas y las horas de salida de este grupo.\n' +
+               'Los corredores y sus manillas se conservan. Los otros grupos no se tocan.\n' +
+               'No se puede deshacer: comparte una copia antes si la necesitas.',
+      confirmar: 'Sí, borrar las vueltas'
+    });
     if (!ok) return;
     await Estado.borrarVueltas();
-    Util.aviso('Vueltas borradas', 'ok');
+    UI.aviso('Vueltas borradas', 'neutro');
     App.tandaCambio();
   }
 
   async function borrarTodo() {
-    let eventosTotales = 0;
-    for (const t of est.tandas.values()) eventosTotales += Estado.resumenTanda(t.id).eventos;
-    const ok = await Util.confirmar(
-      'Borrar todo',
-      'Se eliminarán TODOS los datos de este dispositivo: ' + est.tandas.size + ' tandas, ' +
-      est.todos.size + ' corredores, sus manillas, ' + eventosTotales +
-      ' eventos y el respaldo de unión.\nEsta acción no se puede deshacer.',
-      'Sí, borrar todo');
+    let eventos = 0;
+    for (const t of est.tandas.values()) eventos += Estado.resumenTanda(t.id).eventos;
+    const ok = await UI.confirmar({
+      titulo: 'Borrar todo',
+      mensaje: 'Se borra TODO lo de este celular: ' + est.tandas.size + ' grupos, ' +
+               est.todos.size + ' corredores y ' + eventos + ' pasadas.',
+      confirmar: 'Continuar'
+    });
     if (!ok) return;
-    const confirmado = await Util.confirmar(
-      '¿Seguro?',
-      'Última confirmación. Si no has exportado, perderás los datos de la carrera.',
-      'Borrar definitivamente');
-    if (!confirmado) return;
+    const seguro = await UI.confirmar({
+      titulo: '¿Seguro?',
+      mensaje: 'Última confirmación. Si no compartiste una copia, se pierde todo.',
+      confirmar: 'Borrar definitivamente'
+    });
+    if (!seguro) return;
     await Estado.borrarTodo();
-    $('#btn-deshacer-union').hidden = true;
-    Util.aviso('Todos los datos fueron borrados', 'ok');
+    UI.aviso('Todo borrado', 'neutro');
     App.tandaCambio();
   }
 
-  /* ---------------- ciclo de vida ---------------- */
+  /* ================= pantalla ================= */
 
-  async function iniciar() {
-    $('#form-config').addEventListener('submit', guardarConfig);
-    $('#btn-padron-descargar').addEventListener('click', () => accionPadron('descargar'));
-    $('#btn-padron-compartir').addEventListener('click', () => accionPadron('compartir'));
-    $('#btn-padron-copiar').addEventListener('click', () => accionPadron('copiar'));
-    $('#file-padron').addEventListener('change', importarPadron);
-    $('#file-union').addEventListener('change', cargarArchivosUnion);
-    $('#btn-deshacer-union').addEventListener('click', deshacerUnion);
-    $('#btn-diagnostico').addEventListener('click', diagnosticar);
-    $('#btn-demo').addEventListener('click', datosDePrueba);
-    $('#btn-borrar-vueltas').addEventListener('click', borrarVueltas);
-    $('#btn-borrar-todo').addEventListener('click', borrarTodo);
+  function pintar() {
+    caja.innerHTML = '';
+    const t = est.tandaActiva;
+    const salidas = Estado.oleadas();
+    const r = Estado.resumen();
 
-    $('#reloj-zona').textContent = 'Zona horaria de referencia: ' + Util.ZONA +
-      ' (formato 24 h). Zona del sistema: ' +
-      (Intl.DateTimeFormat().resolvedOptions().timeZone || 'desconocida') + '.';
+    caja.append(tarjetaGrupo());
 
-    cargarFormulario();
-    pintarReloj();
-    diagnosticar();
-    if (await Exportar.hayUnionPrevia()) $('#btn-deshacer-union').hidden = false;
+    const menu = UI.el('div', { clase: 'lista' }, [
+      opcionMenu({
+        icono: 'capas', titulo: 'Grupos',
+        detalle: est.tandas.size + (est.tandas.size === 1 ? ' grupo creado' : ' grupos creados'),
+        alPulsar: () => UI.hoja({ titulo: 'Grupos', cuerpo: Tandas.panelGrupos() })
+      }),
+      opcionMenu({
+        icono: 'salida', titulo: 'Salidas de este grupo',
+        detalle: salidas.length === 1 ? 'Una sola salida' : salidas.length + ' salidas escalonadas',
+        alPulsar: () => UI.hoja({ titulo: 'Salidas de «' + t.nombre + '»', cuerpo: Tandas.panelSalidas() })
+      }),
+      opcionMenu({
+        icono: 'celular', titulo: 'Este celular',
+        detalle: est.config.idDispositivo + ' · ' + est.config.nombrePuesto,
+        alPulsar: abrirCelular
+      }),
+      opcionMenu({
+        icono: 'reloj', titulo: 'Verificar la hora',
+        detalle: 'Compárala con los otros celulares antes de arrancar',
+        alPulsar: abrirReloj
+      })
+    ]);
+    caja.append(UI.el('h2', { clase: 'seccion-titulo', texto: 'Configuración' }), menu);
+
+    const compartir = UI.el('div', { clase: 'lista' }, [
+      opcionMenu({
+        icono: 'grupo', titulo: 'Lista de corredores',
+        detalle: 'Pásala a los otros celulares o recíbela',
+        alPulsar: abrirLista
+      }),
+      opcionMenu({
+        icono: 'capas', titulo: 'Juntar los datos de los celulares',
+        detalle: 'Al final de la carrera',
+        alPulsar: abrirUnion
+      })
+    ]);
+    caja.append(UI.el('h2', { clase: 'seccion-titulo', texto: 'Compartir' }), compartir);
+
+    const ayuda = UI.el('div', { clase: 'lista' }, [
+      opcionMenu({
+        icono: 'info', titulo: 'Revisión del sistema',
+        detalle: r.sinChip ? r.sinChip + ' corredores sin manilla' : 'Todo listo',
+        alPulsar: abrirRevision
+      }),
+      opcionMenu({
+        icono: 'rayo', titulo: 'Cargar datos de prueba',
+        detalle: 'Para practicar antes del día de la carrera',
+        alPulsar: datosDePrueba
+      })
+    ]);
+    caja.append(UI.el('h2', { clase: 'seccion-titulo', texto: 'Ayuda' }), ayuda);
+
+    caja.append(
+      UI.el('h2', { clase: 'seccion-titulo', texto: 'Borrar' }),
+      UI.tarjeta({
+        tono: 'peligro',
+        cuerpo: UI.el('div', { clase: 'acciones acciones--apilada' }, [
+          UI.boton({ texto: 'Borrar las vueltas de este grupo', icono: 'basura', tipo: 'peligro', alPulsar: borrarVueltas }),
+          UI.boton({ texto: 'Borrar todo', icono: 'basura', tipo: 'peligro', alPulsar: borrarTodo })
+        ])
+      }),
+      UI.el('p', {
+        clase: 'campo__ayuda',
+        style: 'text-align:center;margin:20px 0 8px',
+        texto: 'Los datos se quedan en este celular. Solo salen cuando tú los compartes.'
+      })
+    );
   }
 
-  function refrescar() { cargarFormulario(); }
+  /* ================= ciclo de vida ================= */
 
-  return { iniciar, refrescar, pintarReloj, diagnosticar };
+  async function iniciar() {
+    caja = $('#ajustes-contenido');
+    pintar();
+  }
+
+  function refrescar() { if (caja) pintar(); }
+
+  return { iniciar, refrescar };
 })();

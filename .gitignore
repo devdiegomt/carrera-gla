@@ -24,3 +24,6 @@ padron_*.csv
 padron_*.json
 respaldo_*.json
 descartes_*.csv
+
+# Config local del editor/agente
+.claude/

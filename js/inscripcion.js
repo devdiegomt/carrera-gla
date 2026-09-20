@@ -1,6 +1,10 @@
 /* ============================================================
-   inscripcion.js — inscripción exprés por manilla, alta manual,
-   vinculación, lista buscable y carga masiva.
+   inscripcion.js — agregar corredores al grupo activo.
+
+   Tres formas, una sola a la vez para no abrumar:
+     1. Con manilla  — escanear y escribir el nombre.
+     2. A mano       — para uno o dos sueltos.
+     3. Desde Excel  — descargar la planilla, llenarla y subirla.
    ============================================================ */
 'use strict';
 
@@ -9,494 +13,157 @@ const Inscripcion = (() => {
   const $ = Util.$;
   const est = Estado.est;
 
+  let modo = 'manilla';
   let filtro = '';
-  let soloSinChip = false;
-  let planMasivo = null;
+  let soloSinManilla = false;
 
-  // Estado del modo exprés
+  // modo manilla
   let expresActivo = false;
-  let chipLeido = null;      // { uid, hist }
+  let chipLeido = null;
+  let btnEscanear, textoEscaneo, cajaFormularioChip;
 
-  /* ================= inscripción exprés ================= */
+  // modo excel
+  let planImportado = null;
 
-  async function alternarExpres() {
-    Util.prepararAudio();
-    if (expresActivo) {
-      NFC.detener();
-      expresActivo = false;
-      pintarBotonExpres();
-      $('#expres-estado').textContent = 'Lectura detenida.';
-      return;
-    }
-    if (!NFC.disponible()) {
-      Util.alerta('NFC no disponible', NFC.mensajeError({ name: 'NotSupportedError' }));
-      return;
-    }
-    if (NFC.estaActivo()) {
-      NFC.detener();
-      Carrera.refrescar();
-      Util.aviso('Se detuvo la lectura de la carrera para inscribir', '');
-    }
+  let cajaAgregar, cajaLista;
 
-    $('#expres-estado').textContent = 'Pidiendo permiso de NFC…';
-    const ok = await NFC.iniciar(alLeerManilla, (e, mensaje) => {
-      $('#expres-estado').textContent = mensaje;
-      if (e && e.name !== 'ReadingError') {
-        expresActivo = false;
-        pintarBotonExpres();
-        Util.alerta('NFC no disponible', mensaje);
-      } else {
-        Util.retro('error');
-      }
-    });
-    if (ok) {
-      expresActivo = true;
-      App.mantenerPantalla();
-      $('#expres-estado').textContent = 'Acerca la primera manilla.';
-    }
-    pintarBotonExpres();
-  }
+  /* ================= plantilla de Excel ================= */
 
-  function pintarBotonExpres() {
-    const b = $('#btn-expres');
-    $('#btn-expres-texto').textContent = expresActivo
-      ? 'Escaneando — tocar para detener'
-      : 'Escanear manilla e inscribir';
-    b.classList.toggle('btn-activo', expresActivo);
-    b.classList.toggle('btn-primario', !expresActivo);
-    b.querySelector('.btn-icono').textContent = expresActivo ? '🟢' : '📡';
-  }
+  const COLUMNAS = ['Dorsal', 'Nombre', 'Categoría', 'Salida'];
 
-  function alLeerManilla({ uid }) {
-    if (!uid) {
-      $('#expres-estado').textContent = 'Esa manilla no expone un identificador legible.';
-      Util.retro('error');
-      return;
-    }
-    if (!$('#expres-form').hidden) {
-      $('#expres-estado').textContent = 'Termina con la manilla anterior (guardar o descartar).';
-      Util.retro('error');
-      return;
-    }
-
-    chipLeido = { uid, hist: Estado.historialDeChip(uid) };
-    Util.retro('ok');
-    pintarFormularioExpres();
-  }
-
-  function pintarFormularioExpres() {
-    const { uid, hist } = chipLeido;
-    const form = $('#expres-form');
-    form.hidden = false;
-
-    $('#expres-chip').textContent = '🔗 ' + uid;
-
-    const caja = $('#expres-historial');
-    caja.innerHTML = '';
-    caja.hidden = true;
-
-    let dorsalSugerido = null;
-    let categoriaSugerida = '';
-
-    if (hist.actual) {
-      caja.hidden = false;
-      caja.append(Util.el('p', {
-        clase: 'malo',
-        texto: 'Esta manilla YA está vinculada en ' + est.tandaActiva.nombre +
-               ' al dorsal ' + hist.actual.dorsal +
-               (hist.actual.nombre ? ' (' + hist.actual.nombre + ')' : '') +
-               '. Si guardas con otro dorsal, se la quitas a ese corredor.'
-      }));
-      dorsalSugerido = hist.actual.dorsal;
-      categoriaSugerida = hist.actual.categoria || '';
-    } else if (hist.previos.length) {
-      caja.hidden = false;
-      caja.append(Util.el('p', { texto: 'Esta manilla se usó antes:' }));
-      const ul = Util.el('ul', {});
-      for (const p of hist.previos.slice(0, 4)) {
-        ul.append(Util.el('li', {
-          texto: hist.nombreTanda(p.tanda) + ' · dorsal ' + p.dorsal +
-                 (p.nombre ? ' · ' + p.nombre : '')
-        }));
-      }
-      caja.append(ul);
-      const previo = hist.previos[0];
-      if (!est.corredores.has(previo.dorsal)) {
-        dorsalSugerido = previo.dorsal;
-        caja.append(Util.el('p', {
-          clase: 'bueno',
-          texto: 'Se propone el mismo dorsal ' + previo.dorsal + ': está libre en esta tanda.'
-        }));
-      } else {
-        caja.append(Util.el('p', {
-          clase: 'malo',
-          texto: 'El dorsal ' + previo.dorsal + ' ya está ocupado en esta tanda; se propone el siguiente libre.'
-        }));
-      }
-      categoriaSugerida = previo.categoria || '';
-    }
-
-    $('#ex-dorsal').value = String(dorsalSugerido || Estado.siguienteDorsal());
-    $('#ex-nombre').value = '';
-    $('#ex-categoria').value = categoriaSugerida;
-    llenarSelectOleadas($('#ex-oleada'));
-    $('#expres-estado').textContent = 'Manilla leída. Escribe el nombre y guarda.';
-    $('#ex-nombre').focus();
-  }
-
-  async function guardarExpres() {
-    if (!chipLeido) return;
-    const dorsal = Number($('#ex-dorsal').value);
-    const nombre = $('#ex-nombre').value.trim();
-    if (!Number.isFinite(dorsal) || dorsal <= 0) {
-      Util.aviso('Dorsal inválido', 'error');
-      return;
-    }
-    if (Estado.fueraDeRango(dorsal)) {
-      const ok = await Util.confirmar(
-        'Dorsal fuera de tu rango',
-        'Este dispositivo tiene asignado el rango ' + textoRango() + '.\n' +
-        'Usar el ' + dorsal + ' puede chocar con otro organizador al unir.',
-        'Usarlo igual', false);
-      if (!ok) return;
-    }
-
-    const ocupado = est.corredores.get(dorsal);
-    if (ocupado && ocupado.nombre && ocupado.nombre !== nombre) {
-      const ok = await Util.confirmar(
-        'Dorsal ocupado',
-        'El dorsal ' + dorsal + ' ya es de ' + ocupado.nombre + ' en esta tanda. ' +
-        '¿Reemplazar sus datos?',
-        'Sí, reemplazar', false);
-      if (!ok) return;
-    }
-
-    await Estado.guardarCorredor({
-      dorsal, nombre,
-      categoria: $('#ex-categoria').value.trim(),
-      oleada: Number($('#ex-oleada').value) || 1
-    });
-    const v = await Estado.vincularUid(dorsal, chipLeido.uid, true);
-    if (!v.ok) { Util.aviso(v.mensaje, 'error'); return; }
-
-    Util.retro('final');
-    Util.aviso('Dorsal ' + dorsal + (nombre ? ' · ' + nombre : '') + ' listo', 'ok');
-    cerrarFormularioExpres();
-    $('#expres-estado').textContent = expresActivo
-      ? 'Guardado. Acerca la siguiente manilla.'
-      : 'Guardado.';
-    App.datosCambiaron();
-  }
-
-  function cerrarFormularioExpres() {
-    chipLeido = null;
-    $('#expres-form').hidden = true;
-    $('#expres-historial').hidden = true;
-  }
-
-  function textoRango() {
-    const d = Number(est.config.rangoDesde) || null;
-    const h = Number(est.config.rangoHasta) || null;
-    if (d && h) return d + '–' + h;
-    if (d) return 'desde ' + d;
-    if (h) return 'hasta ' + h;
-    return 'sin límite';
-  }
-
-  /* ================= alta manual ================= */
-
-  async function guardarDesdeFormulario(ev) {
-    ev.preventDefault();
-    const dorsal = Number($('#in-dorsal').value);
-    const nombre = $('#in-nombre').value.trim();
-
-    if (!Number.isFinite(dorsal) || dorsal <= 0) {
-      Util.aviso('El dorsal debe ser un número mayor que cero', 'error');
-      return;
-    }
-    if (!nombre) { Util.aviso('Escribe el nombre del corredor', 'error'); return; }
-
-    if (Estado.fueraDeRango(dorsal)) {
-      const ok = await Util.confirmar(
-        'Dorsal fuera de tu rango',
-        'Este dispositivo tiene asignado el rango ' + textoRango() + '.\n' +
-        'Usar el ' + dorsal + ' puede chocar con otro organizador al unir.',
-        'Usarlo igual', false);
-      if (!ok) return;
-    }
-
-    const previo = est.corredores.get(dorsal);
-    if (previo && previo.nombre) {
-      const ok = await Util.confirmar(
-        'Dorsal ya usado',
-        'El dorsal ' + dorsal + ' ya es de ' + previo.nombre + ' en ' + est.tandaActiva.nombre +
-        '. ¿Reemplazar sus datos? La manilla vinculada y sus vueltas se conservan.',
-        'Sí, reemplazar', false);
-      if (!ok) return;
-    }
-
-    await Estado.guardarCorredor({
-      dorsal, nombre,
-      categoria: $('#in-categoria').value.trim(),
-      oleada: Number($('#in-oleada').value) || 1
-    });
-    Util.aviso('Guardado: ' + dorsal + ' · ' + nombre, 'ok');
-
-    $('#in-nombre').value = '';
-    $('#in-dorsal').value = String(Estado.siguienteDorsal());
-    $('#in-nombre').focus();
-    App.datosCambiaron();
-  }
-
-  /* ================= vincular manilla ================= */
-
-  async function vincular() {
-    Util.prepararAudio();
-    const dorsal = Number($('#in-vincular-dorsal').value);
-    if (!Number.isFinite(dorsal) || dorsal <= 0) {
-      Util.aviso('Escribe el dorsal que vas a vincular', 'error');
-      return;
-    }
-    if (!est.corredores.get(dorsal)) {
-      Util.aviso('El dorsal ' + dorsal + ' no está inscrito en esta tanda', 'error');
-      return;
-    }
-    if (!NFC.disponible()) {
-      Util.alerta('NFC no disponible', NFC.mensajeError({ name: 'NotSupportedError' }));
-      return;
-    }
-    if (NFC.estaActivo()) {
-      NFC.detener();
-      expresActivo = false;
-      pintarBotonExpres();
-      Carrera.refrescar();
-    }
-
-    $('#vincular-estado').textContent = 'Acerca la manilla del dorsal ' + dorsal + '…';
-
-    let usado = false;
-    await NFC.iniciar(async ({ uid }) => {
-      if (usado) return;
-      usado = true;
-      NFC.detener();
-      if (!uid) {
-        $('#vincular-estado').textContent = 'La manilla no expone un identificador legible.';
-        Util.retro('error');
-        return;
-      }
-      let r = await Estado.vincularUid(dorsal, uid);
-      if (!r.ok && r.ocupadoPor != null) {
-        const forzar = await Util.confirmar('Manilla ocupada',
-          r.mensaje + '.\n¿Se la quitas a ese dorsal y se la das al ' + dorsal + '?',
-          'Sí, reasignar', false);
-        if (!forzar) { $('#vincular-estado').textContent = r.mensaje; return; }
-        r = await Estado.vincularUid(dorsal, uid, true);
-      }
-      $('#vincular-estado').textContent = r.mensaje + (r.ok ? ' · ' + uid : '');
-      Util.aviso(r.mensaje, r.ok ? 'ok' : 'error');
-      Util.retro(r.ok ? 'ok' : 'error');
-      if (r.ok) {
-        $('#in-vincular-dorsal').value = '';
-        App.datosCambiaron();
-      }
-    }, (e, mensaje) => {
-      $('#vincular-estado').textContent = mensaje;
-      if (e && e.name !== 'ReadingError') Util.alerta('NFC no disponible', mensaje);
-    });
-  }
-
-  /* ================= lista ================= */
-
-  function coincide(c, q) {
-    if (soloSinChip && c.uid) return false;
-    if (!q) return true;
-    return String(c.dorsal).includes(q) ||
-           (c.nombre || '').toLowerCase().includes(q) ||
-           (c.categoria || '').toLowerCase().includes(q);
-  }
-
-  function pintarLista() {
-    const caja = $('#lista-corredores');
-    const q = filtro.trim().toLowerCase();
-    const todos = Array.from(est.corredores.values()).sort((a, b) => a.dorsal - b.dorsal);
-    const visibles = todos.filter(c => coincide(c, q));
-
-    const r = Estado.resumen();
-    $('#chip-inscritos').textContent = String(todos.length);
-    $('#nota-inscritos').textContent =
-      r.sinChip + ' sin manilla · ' + (todos.length - r.sinChip) + ' con manilla · tanda ' +
-      est.tandaActiva.nombre;
-
-    caja.innerHTML = '';
-    if (!todos.length) {
-      caja.append(Util.el('div', { clase: 'item-vacio', texto: 'Todavía no hay corredores en esta tanda.' }));
-      return;
-    }
-    if (!visibles.length) {
-      caja.append(Util.el('div', { clase: 'item-vacio', texto: 'Ningún corredor coincide con el filtro.' }));
-      return;
-    }
-
-    const oleadas = Estado.oleadas();
-    const tope = 100;
-    for (const c of visibles.slice(0, tope)) {
-      const vueltas = Estado.vueltasDe(c.dorsal);
-      const ol = oleadas.find(o => o.id === c.oleada);
-      const meta = [c.categoria || 'sin categoría'];
-      if (oleadas.length > 1) meta.push(ol ? ol.nombre : 'sin oleada');
-      meta.push(vueltas + ' vuelta' + (vueltas === 1 ? '' : 's'));
-
-      caja.append(Util.el('div', { clase: 'item' }, [
-        Util.el('span', { clase: 'item-dorsal', texto: String(c.dorsal) }),
-        Util.el('div', { clase: 'item-cuerpo' }, [
-          Util.el('strong', { texto: c.nombre || '(sin nombre)' }),
-          Util.el('span', { clase: 'item-meta', texto: meta.join(' · ') })
-        ]),
-        Util.el('span', {
-          clase: c.uid ? 'tilde-chip' : 'sin-chip',
-          title: c.uid ? 'Manilla ' + c.uid : 'Sin manilla vinculada',
-          texto: c.uid ? '🔗' : '○'
-        }),
-        Util.el('div', { clase: 'item-acciones' }, [
-          Util.el('button', { type: 'button', texto: '✏️', 'aria-label': 'Editar', onclick: () => editar(c.dorsal) }),
-          Util.el('button', { type: 'button', texto: '🗑️', 'aria-label': 'Eliminar', onclick: () => eliminar(c.dorsal) })
-        ])
-      ]));
-    }
-    if (visibles.length > tope) {
-      caja.append(Util.el('div', {
-        clase: 'item-vacio',
-        texto: 'Mostrando ' + tope + ' de ' + visibles.length + '. Afina la búsqueda para ver el resto.'
-      }));
-    }
-  }
-
-  /* ================= editar y eliminar ================= */
-
-  async function editar(dorsal) {
-    const c = est.corredores.get(dorsal);
-    if (!c) return;
-
-    const inDorsal = Util.el('input', { type: 'number', value: String(c.dorsal), min: '1', step: '1' });
-    const inNombre = Util.el('input', { type: 'text', value: c.nombre || '', maxlength: '80' });
-    const inCategoria = Util.el('input', { type: 'text', value: c.categoria || '', maxlength: '40' });
-    const selOleada = Util.el('select', {});
-    llenarSelectOleadas(selOleada, c.oleada);
-
-    const cuerpo = Util.el('div', {}, [
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Dorsal' }), inDorsal]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Nombre' }), inNombre]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Categoría' }), inCategoria]),
-      Util.el('div', { clase: 'campo' }, [Util.el('label', { texto: 'Oleada' }), selOleada]),
-      Util.el('p', { clase: 'nota', texto: c.uid ? 'Manilla vinculada: ' + c.uid : 'Sin manilla vinculada.' })
-    ]);
-
-    const botones = [
-      { texto: 'Guardar cambios', clase: 'btn-primario', valor: 'guardar' },
-      { texto: 'Cancelar', clase: 'btn-secundario', valor: null }
+  function filasDeEjemplo() {
+    const salidas = Estado.oleadas();
+    const nombreSalida = salidas[0] ? salidas[0].nombre : 'Salida 1';
+    const otra = salidas[1] ? salidas[1].nombre : nombreSalida;
+    return [
+      [101, 'María Gómez Ruiz', 'Infantil', nombreSalida],
+      [102, 'Juan Pérez Díaz', 'Infantil', nombreSalida],
+      [103, 'Ana Torres León', 'Juvenil', otra]
     ];
-    if (c.uid) botones.splice(1, 0, { texto: 'Desvincular manilla', clase: 'btn-peligro-suave', valor: 'desvincular' });
-
-    const r = await Util.modal('Editar dorsal ' + c.dorsal, cuerpo, botones);
-    if (!r) return;
-
-    if (r === 'desvincular') {
-      await Estado.guardarCorredor(Object.assign({}, c, { uid: null }));
-      Util.aviso('Manilla desvinculada del dorsal ' + c.dorsal, 'ok');
-      App.datosCambiaron();
-      return;
-    }
-
-    const nuevoDorsal = Number(inDorsal.value);
-    const nombre = inNombre.value.trim();
-    if (!nombre) { Util.aviso('El nombre no puede quedar vacío', 'error'); return; }
-    if (!Number.isFinite(nuevoDorsal) || nuevoDorsal <= 0) { Util.aviso('Dorsal inválido', 'error'); return; }
-
-    if (nuevoDorsal !== c.dorsal) {
-      if (est.corredores.has(nuevoDorsal)) {
-        Util.aviso('El dorsal ' + nuevoDorsal + ' ya está ocupado en esta tanda', 'error');
-        return;
-      }
-      if (Estado.vueltasDe(c.dorsal) > 0) {
-        Util.aviso('No se puede cambiar el dorsal: ya tiene vueltas registradas', 'error');
-        return;
-      }
-      await Estado.borrarCorredor(c.dorsal);
-    }
-
-    await Estado.guardarCorredor({
-      dorsal: nuevoDorsal, nombre,
-      categoria: inCategoria.value.trim(),
-      uid: c.uid || null,
-      oleada: Number(selOleada.value) || 1
-    });
-    Util.aviso('Corredor actualizado', 'ok');
-    App.datosCambiaron();
   }
 
-  async function eliminar(dorsal) {
-    const c = est.corredores.get(dorsal);
-    if (!c) return;
-    const vueltas = Estado.vueltasDe(dorsal);
-    const ok = await Util.confirmar(
-      'Eliminar corredor',
-      'Se eliminará el dorsal ' + dorsal + ' (' + (c.nombre || 'sin nombre') + ') de ' +
-      est.tandaActiva.nombre + '.' +
-      (vueltas ? '\nSus ' + vueltas + ' vuelta(s) quedarán registradas pero sin nombre.' : '') +
-      '\nEsta acción no se puede deshacer.',
-      'Sí, eliminar');
-    if (!ok) return;
-    await Estado.borrarCorredor(dorsal);
-    Util.aviso('Corredor eliminado', 'ok');
-    App.datosCambiaron();
+  async function descargarPlantilla() {
+    const salidas = Estado.oleadas().map(o => o.nombre).join(', ');
+    const filas = [COLUMNAS].concat(filasDeEjemplo());
+    // filas en blanco para que el profesor solo tenga que escribir encima
+    for (let i = 0; i < 60; i++) filas.push(['', '', '', '']);
+
+    const instrucciones = [
+      ['Cómo llenar esta planilla'],
+      [''],
+      ['1. Escribe un corredor por fila en la hoja "Corredores".'],
+      ['2. No cambies los títulos de las columnas ni el orden.'],
+      ['3. Borra las tres filas de ejemplo antes de subir el archivo.'],
+      ['4. Guarda el archivo y súbelo en la app: Inscripción → Desde Excel.'],
+      [''],
+      ['Columna', 'Qué va ahí', '¿Obligatoria?'],
+      ['Dorsal', 'El número que lleva el corredor en el peto. No se puede repetir.', 'Sí'],
+      ['Nombre', 'Nombre y apellido del estudiante.', 'Sí'],
+      ['Categoría', 'Por ejemplo: Infantil, Juvenil, Mayores. Sirve para filtrar los resultados.', 'No'],
+      ['Salida', 'Solo si el grupo sale escalonado. Escribe el nombre de la salida.', 'No'],
+      [''],
+      ['Salidas disponibles en este grupo:', salidas],
+      [''],
+      ['Este archivo no lleva datos de la carrera, solo la lista de corredores.'],
+      ['Contiene nombres de menores de edad: manéjalo con cuidado.']
+    ];
+
+    try {
+      const bytes = await Excel.crearLibro([
+        { nombre: 'Corredores', filas, anchos: [10, 34, 16, 16] },
+        { nombre: 'Instrucciones', filas: instrucciones, anchos: [40, 52, 14] }
+      ]);
+      const nombre = 'Planilla_' + Util.limpiarNombreArchivo(est.tandaActiva.nombre) + '.xlsx';
+      Util.descargar(nombre, bytes,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    } catch (e) {
+      UI.alerta({ titulo: 'No se pudo crear la planilla', mensaje: e.message });
+    }
   }
 
-  /* ================= carga masiva ================= */
+  /* ================= importar desde Excel ================= */
 
-  function resolverOleada(texto) {
+  /** Para títulos de columna: sin tildes, sin espacios y sin dígitos. */
+  function normalizarTitulo(s) {
+    return String(s || '').toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z]/g, '');
+  }
+
+  /** Para valores: conserva los dígitos, si no «Salida 1» y «Salida 2»
+      se volverían el mismo texto. */
+  function normalizarValor(s) {
+    return String(s || '').toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  function resolverSalida(texto) {
     const lista = Estado.oleadas();
-    if (!texto) return lista[0] ? lista[0].id : 1;
-    const n = Number(texto);
+    const t = String(texto || '').trim();
+    if (!t) return lista[0] ? lista[0].id : 1;
+    const n = Number(t);
     if (Number.isFinite(n) && lista.some(o => o.id === n)) return n;
-    const porNombre = lista.find(o => o.nombre.toLowerCase() === texto.toLowerCase());
+    const porNombre = lista.find(o => normalizarValor(o.nombre) === normalizarValor(t));
     return porNombre ? porNombre.id : (lista[0] ? lista[0].id : 1);
   }
 
-  function analizarMasiva(texto) {
-    const validos = [];
+  function analizarFilas(filas) {
     const errores = [];
+    if (!filas.length) return { validos: [], errores: ['El archivo está vacío.'], nuevos: [], actualiza: [] };
+
+    // Busca la fila de títulos en las primeras cinco.
+    let iCabecera = -1;
+    for (let i = 0; i < Math.min(5, filas.length); i++) {
+      const t = filas[i].map(normalizarTitulo);
+      if (t.includes('dorsal') && t.includes('nombre')) { iCabecera = i; break; }
+    }
+    if (iCabecera < 0) {
+      return {
+        validos: [], nuevos: [], actualiza: [],
+        errores: ['No se encontraron las columnas «Dorsal» y «Nombre». ' +
+                  'Descarga la planilla y úsala sin cambiar los títulos.']
+      };
+    }
+
+    const titulos = filas[iCabecera].map(normalizarTitulo);
+    const col = {
+      dorsal: titulos.indexOf('dorsal'),
+      nombre: titulos.indexOf('nombre'),
+      categoria: titulos.findIndex(t => t === 'categoria'),
+      salida: titulos.findIndex(t => t === 'salida' || t === 'oleada')
+    };
+
+    const validos = [];
     const vistos = new Set();
 
-    texto.split(/\r?\n/).forEach((linea, i) => {
-      const n = i + 1;
-      const s = linea.trim();
-      if (!s || s.startsWith('#')) return;
+    for (let i = iCabecera + 1; i < filas.length; i++) {
+      const f = filas[i];
+      const linea = i + 1;
+      const crudoDorsal = (f[col.dorsal] || '').toString().trim();
+      const nombre = (col.nombre >= 0 ? (f[col.nombre] || '') : '').toString().trim();
+      if (!crudoDorsal && !nombre) continue;   // fila en blanco
 
-      const partes = s.split(/[,;\t]/).map(p => p.trim());
-      if (partes.length < 2) {
-        errores.push('Línea ' + n + ': faltan campos (dorsal,nombre,categoria,oleada)');
-        return;
-      }
-      const dorsal = Number(partes[0]);
+      const dorsal = Number(crudoDorsal);
       if (!Number.isFinite(dorsal) || dorsal <= 0 || Math.floor(dorsal) !== dorsal) {
-        errores.push('Línea ' + n + ': «' + partes[0] + '» no es un dorsal válido');
-        return;
+        errores.push('Fila ' + linea + ': «' + crudoDorsal + '» no es un número de dorsal válido.');
+        continue;
       }
-      if (!partes[1]) { errores.push('Línea ' + n + ': el nombre está vacío'); return; }
+      if (!nombre) { errores.push('Fila ' + linea + ': falta el nombre del dorsal ' + dorsal + '.'); continue; }
       if (vistos.has(dorsal)) {
-        errores.push('Línea ' + n + ': el dorsal ' + dorsal + ' se repite en el texto');
-        return;
+        errores.push('Fila ' + linea + ': el dorsal ' + dorsal + ' está repetido en el archivo.');
+        continue;
       }
       if (Estado.fueraDeRango(dorsal)) {
-        errores.push('Línea ' + n + ': el dorsal ' + dorsal + ' está fuera del rango de este dispositivo (' + textoRango() + ')');
+        errores.push('Fila ' + linea + ': el dorsal ' + dorsal + ' está fuera del rango de este celular (' + textoRango() + ').');
       }
       vistos.add(dorsal);
       validos.push({
-        dorsal, nombre: partes[1],
-        categoria: (partes[2] || '').trim(),
-        oleada: resolverOleada((partes[3] || '').trim())
+        dorsal, nombre,
+        categoria: col.categoria >= 0 ? (f[col.categoria] || '').toString().trim() : '',
+        oleada: resolverSalida(col.salida >= 0 ? f[col.salida] : '')
       });
-    });
+    }
 
     return {
       validos, errores,
@@ -505,78 +172,83 @@ const Inscripcion = (() => {
     };
   }
 
-  function vistaPrevia() {
-    const texto = $('#in-masiva').value;
-    if (!texto.trim()) { Util.aviso('Pega primero el listado', 'error'); return; }
+  async function alSubirArchivo(archivo, caja) {
+    caja.innerHTML = '';
+    caja.hidden = false;
+    caja.append(UI.el('p', { texto: 'Leyendo ' + archivo.name + '…' }));
+    try {
+      planImportado = analizarFilas(await Excel.leerArchivo(archivo));
+    } catch (e) {
+      caja.hidden = true;
+      UI.alerta({ titulo: 'No se pudo leer el archivo', mensaje: e.message });
+      return;
+    }
+    pintarPrevia(caja, archivo.name);
+  }
 
-    planMasivo = analizarMasiva(texto);
-    const caja = $('#previa-masiva');
+  function pintarPrevia(caja, nombreArchivo) {
+    const p = planImportado;
     caja.innerHTML = '';
     caja.hidden = false;
 
-    caja.append(Util.el('h3', { texto: 'Resumen · ' + est.tandaActiva.nombre }));
-    caja.append(Util.el('ul', {}, [
-      Util.el('li', { clase: 'bueno', texto: planMasivo.nuevos.length + ' corredores nuevos' }),
-      Util.el('li', { texto: planMasivo.actualiza.length + ' dorsales que ya existen y se actualizarán (conservan manilla y vueltas)' }),
-      Util.el('li', { clase: planMasivo.errores.length ? 'malo' : '', texto: planMasivo.errores.length + ' avisos' })
+    caja.append(UI.el('h3', { texto: nombreArchivo }));
+    caja.append(UI.el('ul', {}, [
+      UI.el('li', { clase: p.nuevos.length ? 'marca-bien' : '', texto: p.nuevos.length + ' corredores nuevos' }),
+      UI.el('li', { texto: p.actualiza.length + ' ya existían y se actualizan (conservan manilla y vueltas)' }),
+      UI.el('li', { clase: p.errores.length ? 'marca-mal' : '', texto: p.errores.length + ' filas con problema' })
     ]));
 
-    if (planMasivo.errores.length) {
-      caja.append(Util.el('h3', { clase: 'malo', texto: 'Avisos' }));
-      const ue = Util.el('ul', {});
-      for (const e of planMasivo.errores.slice(0, 40)) ue.append(Util.el('li', { clase: 'malo', texto: e }));
-      if (planMasivo.errores.length > 40) ue.append(Util.el('li', { texto: '… y ' + (planMasivo.errores.length - 40) + ' más' }));
-      caja.append(ue);
+    if (p.errores.length) {
+      caja.append(UI.el('h3', { clase: 'marca-mal', texto: 'Revisa estas filas' }));
+      const ul = UI.el('ul');
+      for (const e of p.errores.slice(0, 25)) ul.append(UI.el('li', { texto: e }));
+      if (p.errores.length > 25) ul.append(UI.el('li', { texto: '…y ' + (p.errores.length - 25) + ' más.' }));
+      caja.append(ul);
     }
 
-    if (planMasivo.validos.length) {
-      const oleadas = Estado.oleadas();
-      caja.append(Util.el('h3', { texto: 'Primeras filas' }));
-      const t = Util.el('table');
-      t.append(Util.el('tr', {}, [
-        Util.el('th', { texto: 'Dorsal' }), Util.el('th', { texto: 'Nombre' }),
-        Util.el('th', { texto: 'Categoría' }), Util.el('th', { texto: 'Oleada' }),
-        Util.el('th', { texto: 'Acción' })
-      ]));
-      for (const c of planMasivo.validos.slice(0, 15)) {
-        const ol = oleadas.find(o => o.id === c.oleada);
-        t.append(Util.el('tr', {}, [
-          Util.el('td', { texto: String(c.dorsal) }),
-          Util.el('td', { texto: c.nombre }),
-          Util.el('td', { texto: c.categoria || '—' }),
-          Util.el('td', { texto: ol ? ol.nombre : '—' }),
-          Util.el('td', { texto: est.corredores.has(c.dorsal) ? 'Actualiza' : 'Nuevo' })
+    if (p.validos.length) {
+      const salidas = Estado.oleadas();
+      caja.append(UI.el('h3', { texto: 'Primeros corredores' }));
+      const lista = UI.el('div', { clase: 'lista' });
+      for (const c of p.validos.slice(0, 6)) {
+        const o = salidas.find(x => x.id === c.oleada);
+        lista.append(UI.el('div', { clase: 'fila' }, [
+          UI.el('span', { clase: 'fila__dorsal', texto: String(c.dorsal) }),
+          UI.el('div', { clase: 'fila__cuerpo' }, [
+            UI.el('div', { clase: 'fila__titulo', texto: c.nombre }),
+            UI.el('div', { clase: 'fila__meta', texto: [c.categoria || 'Sin categoría', salidas.length > 1 && o ? o.nombre : null].filter(Boolean).join(' · ') })
+          ])
         ]));
       }
-      caja.append(t);
-      if (planMasivo.validos.length > 15) {
-        caja.append(Util.el('p', { clase: 'nota', texto: '… y ' + (planMasivo.validos.length - 15) + ' filas más.' }));
+      caja.append(lista);
+      if (p.validos.length > 6) {
+        caja.append(UI.el('p', { clase: 'campo__ayuda', texto: '…y ' + (p.validos.length - 6) + ' más.' }));
       }
+      caja.append(UI.boton({
+        texto: 'Agregar ' + p.validos.length + ' corredores', icono: 'cheque',
+        tipo: 'principal', ancho: 'completo', alPulsar: () => confirmarImportacion(caja)
+      }));
     }
-
-    $('#btn-confirmar-masiva').disabled = planMasivo.validos.length === 0;
   }
 
-  async function confirmarMasiva() {
-    if (!planMasivo || !planMasivo.validos.length) return;
-    const ok = await Util.confirmar(
-      'Confirmar carga masiva',
-      'En ' + est.tandaActiva.nombre + ' se guardarán ' + planMasivo.nuevos.length +
-      ' corredores nuevos y se actualizarán ' + planMasivo.actualiza.length + '.',
-      'Sí, cargar', false);
+  async function confirmarImportacion(caja) {
+    const p = planImportado;
+    if (!p || !p.validos.length) return;
+    const ok = await UI.confirmar({
+      titulo: 'Agregar al grupo «' + est.tandaActiva.nombre + '»',
+      mensaje: 'Se agregan ' + p.nuevos.length + ' corredores nuevos y se actualizan ' +
+               p.actualiza.length + '.',
+      confirmar: 'Sí, agregar', peligro: false
+    });
     if (!ok) return;
 
     const idTanda = est.tandaActiva.id;
-    const finales = planMasivo.validos.map(c => {
+    const finales = p.validos.map(c => {
       const prev = est.corredores.get(c.dorsal);
       return {
         id: Estado.claveCorredor(idTanda, c.dorsal),
-        tanda: idTanda,
-        dorsal: c.dorsal,
-        nombre: c.nombre,
-        categoria: c.categoria,
-        uid: prev ? (prev.uid || null) : null,
-        oleada: c.oleada
+        tanda: idTanda, dorsal: c.dorsal, nombre: c.nombre,
+        categoria: c.categoria, uid: prev ? (prev.uid || null) : null, oleada: c.oleada
       };
     });
     await DB.ponerVarios('corredores', finales);
@@ -585,80 +257,507 @@ const Inscripcion = (() => {
       est.corredores.set(c.dorsal, c);
       if (c.uid) est.porUid.set(c.uid, c.dorsal);
     }
-
-    Util.aviso(finales.length + ' corredores cargados', 'ok');
-    $('#in-masiva').value = '';
-    $('#previa-masiva').hidden = true;
-    $('#btn-confirmar-masiva').disabled = true;
-    planMasivo = null;
+    UI.aviso(finales.length + ' corredores agregados', 'ok');
+    planImportado = null;
+    caja.hidden = true;
     App.datosCambiaron();
   }
 
-  /* ================= utilidades ================= */
+  /* ================= modo manilla ================= */
 
-  function llenarSelectOleadas(sel, seleccionada) {
-    const lista = Estado.oleadas();
-    sel.innerHTML = '';
-    for (const o of lista) {
-      sel.append(Util.el('option', { value: String(o.id), texto: o.nombre }));
+  async function alternarEscaneo() {
+    Util.prepararAudio();
+    if (expresActivo) {
+      NFC.detener();
+      expresActivo = false;
+      pintarBotonEscaneo();
+      textoEscaneo.textContent = 'Escaneo apagado.';
+      return;
     }
-    sel.value = String(seleccionada || (lista[0] ? lista[0].id : 1));
+    if (!NFC.disponible()) {
+      UI.alerta({ titulo: 'Sin NFC', mensaje: NFC.mensajeError({ name: 'NotSupportedError' }) });
+      return;
+    }
+    if (NFC.estaActivo()) { NFC.detener(); Carrera.refrescar(); }
+
+    textoEscaneo.textContent = 'Pidiendo permiso…';
+    const ok = await NFC.iniciar(alLeerManilla, (e, mensaje) => {
+      textoEscaneo.textContent = mensaje;
+      if (e && e.name !== 'ReadingError') {
+        expresActivo = false;
+        pintarBotonEscaneo();
+        UI.alerta({ titulo: 'Sin NFC', mensaje });
+      } else Util.retro('error');
+    });
+    if (ok) {
+      expresActivo = true;
+      App.mantenerPantalla();
+      textoEscaneo.textContent = 'Acerca la primera manilla.';
+    }
+    pintarBotonEscaneo();
+  }
+
+  function pintarBotonEscaneo() {
+    if (!btnEscanear) return;
+    btnEscanear.classList.toggle('esta-activo', expresActivo);
+    btnEscanear.classList.toggle('btn--principal', !expresActivo);
+    btnEscanear.querySelector('.btn__texto').textContent = expresActivo
+      ? 'Escaneando — tocar para parar'
+      : 'Escanear manilla';
+  }
+
+  function alLeerManilla({ uid }) {
+    if (!uid) {
+      textoEscaneo.textContent = 'Esa manilla no se pudo identificar.';
+      Util.retro('error');
+      return;
+    }
+    if (!cajaFormularioChip.hidden) {
+      textoEscaneo.textContent = 'Termina con la manilla anterior antes de leer otra.';
+      Util.retro('error');
+      return;
+    }
+    chipLeido = { uid, hist: Estado.historialDeChip(uid) };
+    Util.retro('ok');
+    pintarFormularioChip();
+  }
+
+  function pintarFormularioChip() {
+    const { uid, hist } = chipLeido;
+    const caja = cajaFormularioChip;
+    caja.innerHTML = '';
+    caja.hidden = false;
+
+    let dorsalSugerido = null;
+    let categoria = '';
+
+    if (hist.actual) {
+      caja.append(UI.nota({
+        tono: 'ojo',
+        texto: 'Esta manilla ya es del dorsal ' + hist.actual.dorsal +
+               (hist.actual.nombre ? ' (' + hist.actual.nombre + ')' : '') +
+               ' en este grupo. Si la guardas con otro dorsal, se la quitas a esa persona.'
+      }));
+      dorsalSugerido = hist.actual.dorsal;
+      categoria = hist.actual.categoria || '';
+    } else if (hist.previos.length) {
+      const previo = hist.previos[0];
+      const libre = !est.corredores.has(previo.dorsal);
+      caja.append(UI.nota({
+        tono: libre ? 'ok' : 'ojo',
+        texto: 'Esta manilla fue del dorsal ' + previo.dorsal +
+               (previo.nombre ? ' (' + previo.nombre + ')' : '') +
+               ' en ' + hist.nombreTanda(previo.tanda) + '. ' +
+               (libre ? 'Ese dorsal está libre aquí, así que se propone el mismo.'
+                      : 'Ese dorsal ya está ocupado aquí, así que se propone el siguiente libre.')
+      }));
+      if (libre) dorsalSugerido = previo.dorsal;
+      categoria = previo.categoria || '';
+    }
+
+    const cDorsal = UI.campo({
+      etiqueta: 'Dorsal', tipo: 'number',
+      valor: dorsalSugerido || Estado.siguienteDorsal()
+    });
+    const cNombre = UI.campo({ etiqueta: 'Nombre', marcador: 'Nombre y apellido', maximo: 80 });
+    const cCategoria = UI.campo({ etiqueta: 'Categoría', valor: categoria, maximo: 40 });
+    const salidas = Estado.oleadas();
+    const cSalida = salidas.length > 1 ? UI.selector({
+      etiqueta: 'Salida',
+      opciones: salidas.map(o => ({ valor: o.id, texto: o.nombre })),
+      valor: salidas[0].id
+    }) : null;
+
+    caja.append(cDorsal, cNombre, cCategoria);
+    if (cSalida) caja.append(cSalida);
+    caja.append(UI.el('div', { clase: 'acciones' }, [
+      UI.boton({
+        texto: 'Guardar y seguir', icono: 'cheque', tipo: 'principal',
+        alPulsar: () => guardarChip(cDorsal, cNombre, cCategoria, cSalida)
+      }),
+      UI.boton({
+        texto: 'Descartar',
+        alPulsar: () => {
+          cerrarFormularioChip();
+          textoEscaneo.textContent = expresActivo ? 'Acerca la siguiente manilla.' : '';
+        }
+      })
+    ]));
+    caja.append(UI.el('p', { clase: 'codigo', style: 'margin-top:10px', texto: 'Manilla ' + uid }));
+
+    textoEscaneo.textContent = 'Manilla leída. Escribe el nombre y guarda.';
+    cNombre.entrada.focus();
+  }
+
+  async function guardarChip(cDorsal, cNombre, cCategoria, cSalida) {
+    if (!chipLeido) return;
+    const dorsal = Number(cDorsal.obtenerValor());
+    const nombre = cNombre.obtenerValor().trim();
+    if (!dorsal || dorsal <= 0) { UI.aviso('Escribe un dorsal válido', 'error'); return; }
+    if (!await avisarSiFueraDeRango(dorsal)) return;
+
+    const ocupado = est.corredores.get(dorsal);
+    if (ocupado && ocupado.nombre && ocupado.nombre !== nombre) {
+      const ok = await UI.confirmar({
+        titulo: 'Dorsal ocupado',
+        mensaje: 'El dorsal ' + dorsal + ' ya es de ' + ocupado.nombre + ' en este grupo. ¿Reemplazar sus datos?',
+        confirmar: 'Sí, reemplazar', peligro: false
+      });
+      if (!ok) return;
+    }
+
+    await Estado.guardarCorredor({
+      dorsal, nombre,
+      categoria: cCategoria.obtenerValor().trim(),
+      oleada: cSalida ? cSalida.obtenerValor() : undefined
+    });
+    const v = await Estado.vincularUid(dorsal, chipLeido.uid, true);
+    if (!v.ok) { UI.aviso(v.mensaje, 'error'); return; }
+
+    Util.retro('final');
+    UI.aviso('Dorsal ' + dorsal + (nombre ? ' · ' + nombre : '') + ' listo', 'ok');
+    cerrarFormularioChip();
+    textoEscaneo.textContent = expresActivo ? 'Listo. Acerca la siguiente manilla.' : 'Guardado.';
+    App.datosCambiaron();
+  }
+
+  function cerrarFormularioChip() {
+    chipLeido = null;
+    if (cajaFormularioChip) { cajaFormularioChip.hidden = true; cajaFormularioChip.innerHTML = ''; }
+  }
+
+  /* ================= modo a mano ================= */
+
+  function textoRango() {
+    const d = Number(est.config.rangoDesde) || null;
+    const h = Number(est.config.rangoHasta) || null;
+    if (d && h) return d + ' a ' + h;
+    if (d) return 'desde ' + d;
+    if (h) return 'hasta ' + h;
+    return 'sin límite';
+  }
+
+  async function avisarSiFueraDeRango(dorsal) {
+    if (!Estado.fueraDeRango(dorsal)) return true;
+    return UI.confirmar({
+      titulo: 'Dorsal fuera de tu rango',
+      mensaje: 'A este celular le tocan los dorsales ' + textoRango() + '.\n' +
+               'Usar el ' + dorsal + ' puede chocar con otro profesor al juntar los datos.',
+      confirmar: 'Usarlo igual', peligro: false
+    });
+  }
+
+  function construirManual(caja) {
+    const cDorsal = UI.campo({ etiqueta: 'Dorsal', tipo: 'number', valor: Estado.siguienteDorsal() });
+    const cNombre = UI.campo({ etiqueta: 'Nombre', marcador: 'Nombre y apellido', maximo: 80 });
+    const cCategoria = UI.campo({ etiqueta: 'Categoría', marcador: 'Infantil, Juvenil…', maximo: 40 });
+    const salidas = Estado.oleadas();
+    const cSalida = salidas.length > 1 ? UI.selector({
+      etiqueta: 'Salida',
+      opciones: salidas.map(o => ({ valor: o.id, texto: o.nombre })),
+      valor: salidas[0].id
+    }) : null;
+
+    caja.append(cDorsal, cNombre, cCategoria);
+    if (cSalida) caja.append(cSalida);
+    caja.append(UI.boton({
+      texto: 'Agregar corredor', icono: 'mas', tipo: 'principal', ancho: 'completo',
+      alPulsar: async () => {
+        const dorsal = Number(cDorsal.obtenerValor());
+        const nombre = cNombre.obtenerValor().trim();
+        if (!dorsal || dorsal <= 0) { UI.aviso('Escribe un dorsal válido', 'error'); return; }
+        if (!nombre) { UI.aviso('Escribe el nombre', 'error'); return; }
+        if (!await avisarSiFueraDeRango(dorsal)) return;
+
+        const previo = est.corredores.get(dorsal);
+        if (previo && previo.nombre) {
+          const ok = await UI.confirmar({
+            titulo: 'Dorsal ocupado',
+            mensaje: 'El dorsal ' + dorsal + ' ya es de ' + previo.nombre +
+                     '. ¿Reemplazar sus datos? La manilla y las vueltas se conservan.',
+            confirmar: 'Sí, reemplazar', peligro: false
+          });
+          if (!ok) return;
+        }
+
+        await Estado.guardarCorredor({
+          dorsal, nombre,
+          categoria: cCategoria.obtenerValor().trim(),
+          oleada: cSalida ? cSalida.obtenerValor() : undefined
+        });
+        UI.aviso('Agregado: ' + dorsal + ' · ' + nombre, 'ok');
+        cNombre.entrada.value = '';
+        cDorsal.entrada.value = String(Estado.siguienteDorsal());
+        cNombre.entrada.focus();
+        App.datosCambiaron();
+      }
+    }));
+
+    if (Number(est.config.rangoDesde) || Number(est.config.rangoHasta)) {
+      caja.append(UI.el('p', {
+        clase: 'campo__ayuda', style: 'margin-top:10px',
+        texto: 'A este celular le tocan los dorsales ' + textoRango() + '.'
+      }));
+    }
+  }
+
+  /* ================= construcción de la pantalla ================= */
+
+  function pintarAgregar() {
+    cajaAgregar.innerHTML = '';
+
+    const selectorModo = UI.segmentado({
+      opciones: [
+        { valor: 'manilla', texto: 'Con manilla' },
+        { valor: 'mano', texto: 'A mano' },
+        { valor: 'excel', texto: 'Desde Excel' }
+      ],
+      valor: modo,
+      alCambiar: v => { modo = v; pintarAgregar(); }
+    });
+
+    const cuerpo = UI.el('div');
+
+    if (modo === 'manilla') {
+      btnEscanear = UI.boton({
+        texto: 'Escanear manilla', icono: 'nfc', tipo: 'principal',
+        tamano: 'grande', ancho: 'completo', alPulsar: alternarEscaneo
+      });
+      if (!NFC.disponible()) btnEscanear.disabled = true;
+      textoEscaneo = UI.el('p', { clase: 'campo__ayuda', style: 'margin:8px 0' });
+      cajaFormularioChip = UI.el('div', { hidden: true, style: 'margin-top:12px' });
+
+      cuerpo.append(
+        UI.el('p', {
+          clase: 'campo__ayuda', style: 'margin-bottom:12px',
+          texto: 'Acerca la manilla: si ya se usó antes, la app te dice de quién era y ' +
+                 'propone el mismo dorsal. Solo escribes el nombre.'
+        }),
+        btnEscanear, textoEscaneo, cajaFormularioChip
+      );
+      pintarBotonEscaneo();
+      if (!NFC.disponible()) {
+        textoEscaneo.textContent = 'Este celular no tiene NFC. Usa «A mano» o «Desde Excel».';
+      }
+
+    } else if (modo === 'mano') {
+      construirManual(cuerpo);
+
+    } else {
+      const previa = UI.el('div', { clase: 'previa', hidden: true });
+      const entradaArchivo = UI.el('input', {
+        type: 'file',
+        accept: '.xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        hidden: true,
+        onchange: ev => {
+          const a = ev.target.files && ev.target.files[0];
+          ev.target.value = '';
+          if (a) alSubirArchivo(a, previa);
+        }
+      });
+
+      cuerpo.append(
+        UI.el('ol', { clase: 'campo__ayuda', style: 'margin:0 0 14px;padding-left:20px;line-height:1.7' }, [
+          UI.el('li', { texto: 'Descarga la planilla y ábrela en Excel o Google Sheets.' }),
+          UI.el('li', { texto: 'Escribe un corredor por fila y borra los ejemplos.' }),
+          UI.el('li', { texto: 'Guarda y sube el archivo aquí mismo.' })
+        ]),
+        UI.boton({
+          texto: 'Descargar planilla', icono: 'excel', tipo: 'principal',
+          ancho: 'completo', alPulsar: descargarPlantilla
+        }),
+        UI.el('div', { style: 'height:8px' }),
+        UI.boton({
+          texto: 'Subir planilla llena', icono: 'subir', ancho: 'completo',
+          alPulsar: () => entradaArchivo.click()
+        }),
+        entradaArchivo,
+        UI.el('p', {
+          clase: 'campo__ayuda', style: 'margin-top:10px',
+          texto: 'Acepta archivos de Excel (.xlsx) y CSV. Antes de agregar nada te muestra qué encontró.'
+        }),
+        previa
+      );
+    }
+
+    cajaAgregar.append(UI.tarjeta({
+      titulo: 'Agregar corredores',
+      cuerpo: UI.el('div', {}, [selectorModo, cuerpo])
+    }));
+  }
+
+  function pintarLista() {
+    cajaLista.innerHTML = '';
+
+    const todos = Array.from(est.corredores.values()).sort((a, b) => a.dorsal - b.dorsal);
+    const r = Estado.resumen();
+    const q = filtro.trim().toLowerCase();
+    const visibles = todos.filter(c => {
+      if (soloSinManilla && c.uid) return false;
+      if (!q) return true;
+      return String(c.dorsal).includes(q) ||
+             (c.nombre || '').toLowerCase().includes(q) ||
+             (c.categoria || '').toLowerCase().includes(q);
+    });
+
+    const cuerpo = UI.el('div');
+
+    const busqueda = UI.campo({ marcador: 'Buscar por dorsal, nombre o categoría', tipo: 'search' });
+    busqueda.entrada.addEventListener('input', () => { filtro = busqueda.entrada.value; pintarLista(); });
+    busqueda.entrada.value = filtro;
+    cuerpo.append(busqueda);
+
+    cuerpo.append(UI.segmentado({
+      opciones: [
+        { valor: 'todos', texto: 'Todos (' + todos.length + ')' },
+        { valor: 'sin', texto: 'Sin manilla (' + r.sinChip + ')' }
+      ],
+      valor: soloSinManilla ? 'sin' : 'todos',
+      alCambiar: v => { soloSinManilla = v === 'sin'; pintarLista(); }
+    }));
+
+    if (!todos.length) {
+      cuerpo.append(UI.vacio({
+        icono: 'grupo',
+        titulo: 'Todavía no hay corredores',
+        mensaje: 'Agrégalos con la manilla, a mano o subiendo la planilla de Excel.'
+      }));
+    } else if (!visibles.length) {
+      cuerpo.append(UI.vacio({ icono: 'buscar', titulo: 'Ninguno coincide', mensaje: 'Prueba con otra búsqueda.' }));
+    } else {
+      const salidas = Estado.oleadas();
+      const lista = UI.el('div', { clase: 'lista', style: 'margin-top:12px' });
+      for (const c of visibles.slice(0, 80)) {
+        const vueltas = Estado.vueltasDe(c.dorsal);
+        const o = salidas.find(x => x.id === c.oleada);
+        const meta = [c.categoria || 'Sin categoría'];
+        if (salidas.length > 1) meta.push(o ? o.nombre : 'Sin salida');
+        meta.push(vueltas === 1 ? '1 vuelta' : vueltas + ' vueltas');
+
+        lista.append(UI.el('button', { clase: 'fila', type: 'button', onclick: () => abrirCorredor(c.dorsal) }, [
+          UI.el('span', { clase: 'fila__dorsal', texto: String(c.dorsal) }),
+          UI.el('div', { clase: 'fila__cuerpo' }, [
+            UI.el('div', { clase: 'fila__titulo', texto: c.nombre || 'Sin nombre' }),
+            UI.el('div', { clase: 'fila__meta', texto: meta.join(' · ') })
+          ]),
+          UI.icono(c.uid ? 'manilla' : 'derecha', { clase: c.uid ? 'tiene-manilla' : '' })
+        ]));
+      }
+      cuerpo.append(lista);
+      if (visibles.length > 80) {
+        cuerpo.append(UI.el('p', {
+          clase: 'campo__ayuda', style: 'margin-top:10px',
+          texto: 'Se muestran 80 de ' + visibles.length + '. Usa el buscador para encontrar a alguien.'
+        }));
+      }
+    }
+
+    cajaLista.append(UI.tarjeta({ titulo: 'Inscritos', cuerpo }));
+  }
+
+  /* ================= ficha de un corredor ================= */
+
+  async function abrirCorredor(dorsal) {
+    const c = est.corredores.get(dorsal);
+    if (!c) return;
+
+    const cDorsal = UI.campo({ etiqueta: 'Dorsal', tipo: 'number', valor: c.dorsal });
+    const cNombre = UI.campo({ etiqueta: 'Nombre', valor: c.nombre, maximo: 80 });
+    const cCategoria = UI.campo({ etiqueta: 'Categoría', valor: c.categoria, maximo: 40 });
+    const salidas = Estado.oleadas();
+    const cSalida = salidas.length > 1 ? UI.selector({
+      etiqueta: 'Salida',
+      opciones: salidas.map(o => ({ valor: o.id, texto: o.nombre })),
+      valor: c.oleada
+    }) : null;
+
+    const cuerpo = UI.el('div', {}, [cDorsal, cNombre, cCategoria]);
+    if (cSalida) cuerpo.append(cSalida);
+    cuerpo.append(UI.nota({
+      tono: c.uid ? 'ok' : 'info',
+      icono: 'manilla',
+      texto: c.uid ? 'Tiene manilla asignada.' : 'Sin manilla. Solo se puede registrar con el teclado.'
+    }));
+    const vueltas = Estado.vueltasDe(dorsal);
+    if (vueltas) {
+      cuerpo.append(UI.el('p', { clase: 'campo__ayuda', texto: 'Lleva ' + vueltas + (vueltas === 1 ? ' vuelta.' : ' vueltas.') }));
+    }
+
+    const acciones = [{ texto: 'Guardar cambios', tipo: 'principal', valor: 'guardar' }];
+    if (c.uid) acciones.push({ texto: 'Quitar la manilla', valor: 'desvincular' });
+    acciones.push({ texto: 'Eliminar del grupo', tipo: 'peligro', valor: 'borrar' });
+
+    const r = await UI.hoja({ titulo: 'Dorsal ' + c.dorsal, cuerpo, acciones });
+    if (!r) return;
+
+    if (r === 'desvincular') {
+      await Estado.guardarCorredor(Object.assign({}, c, { uid: null }));
+      UI.aviso('Manilla liberada', 'ok');
+      App.datosCambiaron();
+      return;
+    }
+
+    if (r === 'borrar') {
+      const ok = await UI.confirmar({
+        titulo: 'Eliminar a ' + (c.nombre || 'dorsal ' + c.dorsal),
+        mensaje: 'Se quita del grupo «' + est.tandaActiva.nombre + '».' +
+                 (vueltas ? '\nSus ' + vueltas + ' vueltas quedan registradas pero sin nombre.' : '') +
+                 '\nNo se puede deshacer.',
+        confirmar: 'Sí, eliminar'
+      });
+      if (!ok) return;
+      await Estado.borrarCorredor(dorsal);
+      UI.aviso('Corredor eliminado', 'neutro');
+      App.datosCambiaron();
+      return;
+    }
+
+    const nuevoDorsal = Number(cDorsal.obtenerValor());
+    const nombre = cNombre.obtenerValor().trim();
+    if (!nombre) { UI.aviso('El nombre no puede quedar vacío', 'error'); return; }
+    if (!nuevoDorsal || nuevoDorsal <= 0) { UI.aviso('Dorsal inválido', 'error'); return; }
+
+    if (nuevoDorsal !== c.dorsal) {
+      if (est.corredores.has(nuevoDorsal)) { UI.aviso('El dorsal ' + nuevoDorsal + ' ya está ocupado', 'error'); return; }
+      if (vueltas > 0) { UI.aviso('No se puede cambiar el dorsal: ya tiene vueltas', 'error'); return; }
+      await Estado.borrarCorredor(c.dorsal);
+    }
+    await Estado.guardarCorredor({
+      dorsal: nuevoDorsal, nombre,
+      categoria: cCategoria.obtenerValor().trim(),
+      uid: c.uid || null,
+      oleada: cSalida ? cSalida.obtenerValor() : c.oleada
+    });
+    UI.aviso('Cambios guardados', 'ok');
+    App.datosCambiaron();
   }
 
   /* ================= ciclo de vida ================= */
 
   function iniciar() {
-    $('#btn-expres').addEventListener('click', alternarExpres);
-    $('#btn-expres-guardar').addEventListener('click', guardarExpres);
-    $('#btn-expres-cancelar').addEventListener('click', () => {
-      cerrarFormularioExpres();
-      $('#expres-estado').textContent = expresActivo ? 'Descartada. Acerca la siguiente manilla.' : '';
-    });
-
-    $('#form-corredor').addEventListener('submit', guardarDesdeFormulario);
-    $('#btn-vincular').addEventListener('click', vincular);
-    $('#btn-previa-masiva').addEventListener('click', vistaPrevia);
-    $('#btn-confirmar-masiva').addEventListener('click', confirmarMasiva);
-    $('#buscar-corredor').addEventListener('input', e => { filtro = e.target.value; pintarLista(); });
-    $('#btn-filtro-sinchip').addEventListener('click', () => { soloSinChip = true; pintarLista(); });
-    $('#btn-filtro-todos').addEventListener('click', () => { soloSinChip = false; pintarLista(); });
-
-    if (!NFC.disponible()) $('#btn-expres').disabled = true;
-    pintarBotonExpres();
+    cajaAgregar = $('#inscripcion-agregar');
+    cajaLista = $('#inscripcion-lista');
     refrescar();
   }
 
   function refrescar() {
-    if (!$('#in-dorsal').value) $('#in-dorsal').value = String(Estado.siguienteDorsal());
-    const dl = $('#lista-categorias');
-    dl.innerHTML = '';
-    for (const c of Estado.categorias()) dl.append(Util.el('option', { value: c }));
-    llenarSelectOleadas($('#in-oleada'), Number($('#in-oleada').value));
-    $('#nota-rango').textContent = 'Rango de dorsales de ' + est.config.idDispositivo +
-      ': ' + textoRango() + '. Se configura en Ajustes.';
+    if (!cajaAgregar) return;
+    pintarAgregar();
     pintarLista();
   }
 
-  /**
-   * Al cambiar de tanda hay que soltar el formulario exprés a medias y
-   * resincronizar el botón: la lectura puede haberse detenido desde otra
-   * pantalla (la carrera, la vinculación o el propio cambio de tanda).
-   */
+  function sincronizar() {
+    const real = NFC.estaActivo();
+    if (expresActivo !== real) { expresActivo = real; pintarBotonEscaneo(); }
+  }
+
   function alCambiarTanda() {
-    cerrarFormularioExpres();
-    sincronizarExpres();
-    $('#in-dorsal').value = String(Estado.siguienteDorsal());
+    cerrarFormularioChip();
+    planImportado = null;
+    filtro = '';
+    sincronizar();
     refrescar();
   }
 
-  function sincronizarExpres() {
-    const real = NFC.estaActivo();
-    if (expresActivo !== real) {
-      expresActivo = real;
-      pintarBotonExpres();
-      if (!real) $('#expres-estado').textContent = 'Lectura detenida.';
-    }
-  }
-
-  return { iniciar, refrescar, alCambiarTanda, sincronizarExpres };
+  return { iniciar, refrescar, sincronizar, alCambiarTanda, analizarFilas };
 })();
