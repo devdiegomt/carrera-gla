@@ -6,7 +6,7 @@
    ============================================================ */
 'use strict';
 
-const VERSION = 'v3.0.0';
+const VERSION = 'v3.1.0';
 const CACHE = 'carrera-vueltas-' + VERSION;
 
 const RECURSOS = [

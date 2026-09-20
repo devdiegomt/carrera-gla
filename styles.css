@@ -100,10 +100,20 @@
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
+/* El recorte horizontal y el freno del rebote van en <html>, nunca en <body>.
+   Puestos en body, el eje Y pasa a `auto` y body se vuelve su propio
+   contenedor de scroll; como no tiene nada que desplazar,
+   overscroll-behavior:contain impide que el gesto llegue al documento y la
+   página deja de moverse salvo sobre los elementos fijos. */
 html {
   -webkit-text-size-adjust: 100%;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
 }
+
+/* Bloquea el fondo mientras hay una hoja abierta. Tiene que ir en <html>:
+   es el elemento cuyo overflow se propaga al viewport. */
+html.sin-scroll { overflow: hidden; }
 
 body {
   margin: 0;
@@ -113,12 +123,9 @@ body {
   font-size: var(--t-base);
   line-height: 1.45;
   min-height: 100dvh;
-  overflow-x: hidden;
-  overscroll-behavior-y: contain;
   padding-bottom: calc(var(--alto-nav) + var(--seguro-abajo) + var(--e4));
   -webkit-tap-highlight-color: transparent;
 }
-body.sin-scroll { overflow: hidden; }
 
 h1, h2, h3 { margin: 0; line-height: 1.25; font-weight: 700; }
 p { margin: 0; }

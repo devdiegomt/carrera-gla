@@ -117,7 +117,7 @@ const UI = (() => {
     const { fondo, resolver } = hojaAbierta;
     hojaAbierta = null;
     fondo.classList.remove('esta-abierta');
-    document.body.classList.remove('sin-scroll');
+    document.documentElement.classList.remove('sin-scroll');
     setTimeout(() => fondo.remove(), 200);
     resolver(valor);
   }
@@ -175,7 +175,7 @@ const UI = (() => {
       });
 
       document.body.append(fondo);
-      document.body.classList.add('sin-scroll');
+      document.documentElement.classList.add('sin-scroll');
       hojaAbierta = { fondo, resolver };
       // requestAnimationFrame no se ejecuta si la pestaña está en segundo plano:
       // sin el respaldo, la hoja quedaría montada pero invisible.
