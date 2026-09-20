@@ -1,0 +1,26 @@
+# Sistema operativo
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# Netlify
+.netlify/
+
+# Empaquetados locales
+*.zip
+
+# Datos exportados desde la app: contienen nombres de menores de edad
+# y NUNCA deben terminar en el repositorio.
+posiciones_*.csv
+eventos_*.csv
+padron_*.csv
+padron_*.json
+respaldo_*.json
+descartes_*.csv
