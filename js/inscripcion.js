@@ -301,8 +301,9 @@ const Inscripcion = (() => {
     if (!btnEscanear) return;
     btnEscanear.classList.toggle('esta-activo', expresActivo);
     btnEscanear.classList.toggle('btn--principal', !expresActivo);
+    // El texto largo se recortaba dentro de la tarjeta en pantallas de 360 px.
     btnEscanear.querySelector('.btn__texto').textContent = expresActivo
-      ? 'Escaneando — tocar para parar'
+      ? 'Escaneando — parar'
       : 'Escanear manilla';
   }
 
