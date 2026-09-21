@@ -66,6 +66,18 @@ Las columnas son `Dorsal`, `Nombre`, `Categoría` y `Salida`. Solo las dos
 primeras son obligatorias. La app encuentra los títulos aunque estén en otro
 orden o unas filas más abajo, y también acepta archivos `.csv`.
 
+### Repartir las manillas
+
+Después de subir la planilla nadie tiene manilla todavía. En la tarjeta
+**Inscritos** aparece el boton **Repartir manillas**, que abre una cadena de
+montaje: la app muestra al siguiente corredor sin manilla, acercas la suya, la
+asigna y pasa sola al siguiente. Un escaneo por persona, sin teclear nada.
+
+Si alguien no esta en la fila, **Saltar** pasa al siguiente y **Ir a ese dorsal**
+salta a uno concreto. Si la manilla ya es de otro corredor, avisa y ofrece
+pasarsela con un toque. Para un caso suelto, la ficha de cada corredor tiene
+**Asignarle una manilla**.
+
 ### Con manilla
 
 Para repartir manillas reutilizadas. Enciendes el escaneo, acercas una manilla

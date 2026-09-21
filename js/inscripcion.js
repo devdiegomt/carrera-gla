@@ -393,11 +393,13 @@ const Inscripcion = (() => {
   async function guardarChip(cDorsal, cNombre, cCategoria, cSalida) {
     if (!chipLeido) return;
     const dorsal = Number(cDorsal.obtenerValor());
-    const nombre = cNombre.obtenerValor().trim();
+    const ocupado = est.corredores.get(dorsal);
+    // Si el dorsal ya venía de la planilla y el campo quedó vacío, se conserva
+    // su nombre en vez de borrarlo.
+    const nombre = cNombre.obtenerValor().trim() || (ocupado ? ocupado.nombre : '');
     if (!dorsal || dorsal <= 0) { UI.aviso('Escribe un dorsal válido', 'error'); return; }
     if (!await avisarSiFueraDeRango(dorsal)) return;
 
-    const ocupado = est.corredores.get(dorsal);
     if (ocupado && ocupado.nombre && ocupado.nombre !== nombre) {
       const ok = await UI.confirmar({
         titulo: 'Dorsal ocupado',
@@ -425,6 +427,164 @@ const Inscripcion = (() => {
   function cerrarFormularioChip() {
     chipLeido = null;
     if (cajaFormularioChip) { cajaFormularioChip.hidden = true; cajaFormularioChip.innerHTML = ''; }
+  }
+
+  /* ================= repartir manillas =================
+     Para después de importar la planilla: la app va mostrando al
+     siguiente corredor sin manilla y basta con acercar la suya. Un
+     escaneo por persona, sin teclear nada.                          */
+
+  function sinManilla() {
+    return Array.from(est.corredores.values())
+      .filter(c => !c.uid)
+      .sort((a, b) => a.dorsal - b.dorsal);
+  }
+
+  async function repartirManillas(dorsalInicial) {
+    if (!NFC.disponible()) {
+      UI.alerta({ titulo: 'Sin NFC', mensaje: NFC.mensajeError({ name: 'NotSupportedError' }) });
+      return;
+    }
+    if (NFC.estaActivo()) { NFC.detener(); expresActivo = false; Carrera.refrescar(); }
+
+    const total = est.corredores.size;
+    let actual = null;
+    let aviso = null;
+
+    const caja = UI.el('div');
+    const entradaIr = UI.campo({
+      etiqueta: 'Ir a un dorsal', tipo: 'number', marcador: 'Ej.: 137',
+      ayuda: 'Por si alguien no está en la fila o llegó después.'
+    });
+
+    function elegir(dorsal) {
+      const faltan = sinManilla();
+      if (!faltan.length) { actual = null; return; }
+      const pedido = dorsal != null ? est.corredores.get(dorsal) : null;
+      actual = (pedido && !pedido.uid) ? pedido : faltan[0];
+    }
+
+    function pintar() {
+      const faltan = sinManilla();
+      caja.innerHTML = '';
+
+      if (!faltan.length) {
+        caja.append(UI.vacio({
+          icono: 'cheque',
+          titulo: 'Todos tienen manilla',
+          mensaje: 'Los ' + total + ' corredores del grupo están listos.'
+        }));
+        return;
+      }
+      if (!actual || actual.uid) elegir();
+
+      caja.append(UI.el('p', {
+        clase: 'campo__ayuda', style: 'text-align:center;margin-bottom:10px',
+        texto: 'Van ' + (total - faltan.length) + ' de ' + total + ' · faltan ' + faltan.length
+      }));
+
+      const salidas = Estado.oleadas();
+      const o = salidas.find(x => x.id === actual.oleada);
+      const meta = [actual.categoria || 'Sin categoría'];
+      if (salidas.length > 1 && o) meta.push(o.nombre);
+
+      caja.append(UI.el('div', {
+        clase: 'panel panel--espera',
+        style: 'min-height:auto; padding:24px 16px; margin-bottom:14px'
+      }, [
+        UI.el('div', { clase: 'panel__dorsal', style: 'font-size:80px', texto: String(actual.dorsal) }),
+        UI.el('div', { clase: 'panel__nombre', texto: actual.nombre || 'Sin nombre' }),
+        UI.el('div', { clase: 'panel__detalle', style: 'font-size:15px', texto: meta.join(' · ') })
+      ]));
+
+      caja.append(aviso || UI.nota({ tono: 'info', icono: 'nfc', texto: 'Acerca la manilla de esta persona.' }));
+
+      caja.append(UI.el('div', { clase: 'acciones', style: 'margin:14px 0' }, [
+        UI.boton({
+          texto: 'Saltar por ahora', icono: 'derecha',
+          alPulsar: () => {
+            const lista = sinManilla();
+            const i = lista.findIndex(c => c.dorsal === actual.dorsal);
+            actual = lista[(i + 1) % lista.length];
+            aviso = null;
+            pintar();
+          }
+        })
+      ]));
+
+      caja.append(entradaIr);
+      caja.append(UI.boton({
+        texto: 'Ir a ese dorsal', ancho: 'completo',
+        alPulsar: () => {
+          const d = Number(entradaIr.obtenerValor());
+          const c = est.corredores.get(d);
+          if (!c) { UI.aviso('El dorsal ' + d + ' no está en este grupo', 'error'); return; }
+          if (c.uid) { UI.aviso('El dorsal ' + d + ' ya tiene manilla', 'error'); return; }
+          actual = c;
+          aviso = null;
+          entradaIr.entrada.value = '';
+          pintar();
+        }
+      }));
+    }
+
+    async function asignar(uid) {
+      const dorsal = actual.dorsal;
+      await Estado.vincularUid(dorsal, uid, true);
+      Util.retro('ok');
+      aviso = null;
+      elegir();
+      pintar();
+      UI.aviso('Dorsal ' + dorsal + ' con manilla', 'ok');
+    }
+
+    async function alLeer({ uid }) {
+      if (!uid || !actual) return;
+
+      const duenio = est.porUid.get(uid);
+      if (duenio != null && duenio !== actual.dorsal) {
+        const otro = est.corredores.get(duenio);
+        const destino = actual.dorsal;
+        aviso = UI.el('div', {}, [
+          UI.nota({
+            tono: 'error',
+            texto: 'Esa manilla ya es del dorsal ' + duenio +
+                   (otro && otro.nombre ? ' (' + otro.nombre + ')' : '') + '.'
+          }),
+          UI.boton({
+            texto: 'Quitársela y dársela al ' + destino,
+            tipo: 'peligro', ancho: 'completo',
+            alPulsar: () => asignar(uid)
+          })
+        ]);
+        Util.retro('error');
+        pintar();
+        return;
+      }
+      await asignar(uid);
+    }
+
+    const encendido = await NFC.iniciar(alLeer, (e, mensaje) => {
+      if (e && e.name !== 'ReadingError') UI.alerta({ titulo: 'Sin NFC', mensaje });
+      else Util.retro('error');
+    });
+    if (!encendido) return;
+    App.mantenerPantalla();
+
+    elegir(dorsalInicial);
+    pintar();
+
+    await UI.hoja({
+      titulo: 'Repartir manillas',
+      descripcion: 'Llama a los corredores en orden de dorsal y acerca la manilla de cada uno. ' +
+                   'La app pasa sola al siguiente.',
+      cuerpo: caja,
+      acciones: [{ texto: 'Terminar', tipo: 'principal', valor: 'fin' }]
+    });
+
+    NFC.detener();
+    App.soltarPantalla();
+    App.datosCambiaron();
   }
 
   /* ================= modo a mano ================= */
@@ -617,6 +777,16 @@ const Inscripcion = (() => {
       alCambiar: v => { soloSinManilla = v === 'sin'; pintarLista(); }
     }));
 
+    if (r.sinChip && todos.length) {
+      const b = UI.boton({
+        texto: 'Repartir manillas (' + r.sinChip + ' sin manilla)',
+        icono: 'manilla', tipo: 'principal', ancho: 'completo',
+        alPulsar: () => repartirManillas()
+      });
+      if (!NFC.disponible()) b.disabled = true;
+      cuerpo.append(b);
+    }
+
     if (!todos.length) {
       cuerpo.append(UI.vacio({
         icono: 'grupo',
@@ -685,11 +855,16 @@ const Inscripcion = (() => {
     }
 
     const acciones = [{ texto: 'Guardar cambios', tipo: 'principal', valor: 'guardar' }];
+    if (!c.uid && NFC.disponible()) {
+      acciones.push({ texto: 'Asignarle una manilla', icono: 'manilla', valor: 'asignar' });
+    }
     if (c.uid) acciones.push({ texto: 'Quitar la manilla', valor: 'desvincular' });
     acciones.push({ texto: 'Eliminar del grupo', tipo: 'peligro', valor: 'borrar' });
 
     const r = await UI.hoja({ titulo: 'Dorsal ' + c.dorsal, cuerpo, acciones });
     if (!r) return;
+
+    if (r === 'asignar') { repartirManillas(c.dorsal); return; }
 
     if (r === 'desvincular') {
       await Estado.guardarCorredor(Object.assign({}, c, { uid: null }));
@@ -760,5 +935,6 @@ const Inscripcion = (() => {
     refrescar();
   }
 
-  return { iniciar, refrescar, sincronizar, alCambiarTanda, analizarFilas };
+  return { iniciar, refrescar, sincronizar, alCambiarTanda, analizarFilas,
+           repartirManillas, sinManilla };
 })();
